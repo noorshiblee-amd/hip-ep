@@ -18,8 +18,8 @@ using namespace mlir::torch;
 #include "hip/Dialect/Torch/IR/TorchOps.cpp.inc"
 
 ParseResult torch::parseDefaultTorchOp(OpAsmParser &parser,
-                                        OperationState &result,
-                                        int numOperands, int numResults) {
+                                       OperationState &result, int numOperands,
+                                       int numResults) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SmallVector<Type> operandTypes;
   SmallVector<Type> resultTypes;
@@ -55,8 +55,8 @@ void torch::printDefaultTorchOp(OpAsmPrinter &printer, Operation *op) {
 }
 
 #define TORCH_DEFAULT_FORM(OpClass, NumOperands, NumResults)                   \
-  ParseResult OpClass::parse(OpAsmParser &parser, OperationState &result) {   \
-    return parseDefaultTorchOp(parser, result, NumOperands, NumResults);      \
+  ParseResult OpClass::parse(OpAsmParser &parser, OperationState &result) {    \
+    return parseDefaultTorchOp(parser, result, NumOperands, NumResults);       \
   }                                                                            \
   void OpClass::print(OpAsmPrinter &printer) {                                 \
     printDefaultTorchOp(printer, *this);                                       \
@@ -81,7 +81,7 @@ void ConstantIntOp::print(OpAsmPrinter &printer) {
 }
 
 ParseResult ConstantFloatOp::parse(OpAsmParser &parser,
-                                    OperationState &result) {
+                                   OperationState &result) {
   double value = 0.0;
   if (parser.parseFloat(value))
     return failure();
@@ -95,8 +95,19 @@ void ConstantFloatOp::print(OpAsmPrinter &printer) {
   printer.printFloat(getValue());
 }
 
+ParseResult ConstantNoneOp::parse(OpAsmParser &parser, OperationState &result) {
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+  result.addTypes(TorchNoneType::get(parser.getContext()));
+  return success();
+}
+
+void ConstantNoneOp::print(OpAsmPrinter &printer) {
+  printer.printOptionalAttrDict((*this)->getAttrs());
+}
+
 ParseResult ValueTensorLiteralOp::parse(OpAsmParser &parser,
-                                         OperationState &result) {
+                                        OperationState &result) {
   Attribute attr;
   Type type;
   if (parser.parseLParen() || parser.parseAttribute(attr) ||

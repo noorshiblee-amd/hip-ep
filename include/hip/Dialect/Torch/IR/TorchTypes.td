@@ -28,6 +28,11 @@ def TorchBoolType : Torch_Type<"TorchBool", "bool"> {
   let summary = "Torch bool scalar";
 }
 
+// The C++ class is not mlir::NoneType. The mnemonic is still `none`.
+def TorchNoneType : Torch_Type<"TorchNone", "none"> {
+  let summary = "Torch singleton None";
+}
+
 def ValueTensorType : Torch_Type<"ValueTensor", "vtensor"> {
   let summary = "Ranked value-semantic Torch tensor";
   let description = [{

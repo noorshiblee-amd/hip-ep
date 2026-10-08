@@ -21,15 +21,15 @@ bool mlir::torch::isTorchDialectOp(Operation *op) {
 }
 
 bool mlir::torch::isTorchType(Type type) {
-  return isa<IntType, TorchFloatType, TorchBoolType, ValueTensorType>(type);
+  return isa<IntType, TorchFloatType, TorchBoolType, TorchNoneType,
+             ValueTensorType>(type);
 }
 
 bool mlir::torch::isAcceptedFloatElementType(Type elementType) {
   return elementType.isF16() || elementType.isF32() || elementType.isBF16();
 }
 
-FailureOr<RankedTensorType>
-mlir::torch::toBuiltinTensorType(Type type) {
+FailureOr<RankedTensorType> mlir::torch::toBuiltinTensorType(Type type) {
   auto valueTensor = dyn_cast<ValueTensorType>(type);
   if (!valueTensor || !isAcceptedFloatElementType(valueTensor.getDtype()))
     return failure();
@@ -85,6 +85,15 @@ CarrierResult mlir::torch::lowerTorchCarrier(Operation *op,
     integer.erase();
     return CarrierResult::Lowered;
   }
+  if (isa<ConstantNoneOp>(op)) {
+    if (!op->use_empty()) {
+      op->emitError("torch.constant.none has uses; optional None operands "
+                    "are not lowered");
+      return CarrierResult::Failed;
+    }
+    op->erase();
+    return CarrierResult::Lowered;
+  }
   if (auto floating = dyn_cast<ConstantFloatOp>(op)) {
     auto constant = arith::ConstantOp::create(
         builder, op->getLoc(),
@@ -106,8 +115,8 @@ CarrierResult mlir::torch::lowerTorchCarrier(Operation *op,
   }
 
   auto dense = cast<DenseElementsAttr>(literal.getValue());
-  auto carrier = hip::ConstantOp::create(builder, literal.getLoc(), tensorType,
-                                         dense);
+  auto carrier =
+      hip::ConstantOp::create(builder, literal.getLoc(), tensorType, dense);
   carrier.setSerializationOrderAttr(
       builder.getI64IntegerAttr(serializationOrder++));
   literal.replaceAllUsesWith(carrier.getResult());

@@ -32,6 +32,12 @@ def ConstantFloatOp : Torch_Op<"constant.float", [Pure]> {
   let results = (outs TorchFloatType:$result);
 }
 
+def ConstantNoneOp : Torch_Op<"constant.none", [Pure]> {
+  let summary = "Torch singleton None";
+  let arguments = (ins);
+  let results = (outs TorchNoneType:$result);
+}
+
 def ValueTensorLiteralOp : Torch_Op<"vtensor.literal", [Pure]> {
   let summary = "Dense value-tensor literal";
   let description = [{
