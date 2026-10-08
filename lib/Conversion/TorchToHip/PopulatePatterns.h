@@ -7,6 +7,7 @@
 #define HIP_CONVERSION_TORCHTOHIP_POPULATE_H
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -26,6 +27,12 @@ struct TorchRewrite {
 };
 
 void populateTorchToHipRewrites(SmallVectorImpl<TorchRewrite> &rewrites);
+
+void populateOnnxOperatorRewrites(SmallVectorImpl<TorchRewrite> &rewrites);
+
+/// convert-onnx-to-hip reads metadata from @main_graph. A Torch module with
+/// one function keeps its body and takes that name once it contains onnx ops.
+void renameSoleOnnxEntry(ModuleOp module);
 
 } // namespace torch
 } // namespace mlir

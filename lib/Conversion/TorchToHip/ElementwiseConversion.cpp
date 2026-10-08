@@ -32,9 +32,9 @@ LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
   Type elementType = resultType->getElementType();
 
   auto selfType = dyn_cast<RankedTensorType>(self.getType());
-  if (!selfType || !torch::isAcceptedFloatElementType(selfType.getElementType())) {
-    return op->emitError(
-        "aten.add self must be an f16, f32, or bf16 tensor");
+  if (!selfType ||
+      !torch::isAcceptedFloatElementType(selfType.getElementType())) {
+    return op->emitError("aten.add self must be an f16, f32, or bf16 tensor");
   }
 
   if (scalarOther) {
@@ -50,8 +50,7 @@ LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
   auto otherType = dyn_cast<RankedTensorType>(other.getType());
   if (!otherType ||
       !torch::isAcceptedFloatElementType(otherType.getElementType())) {
-    return op->emitError(
-        "aten.add other must be an f16, f32, or bf16 tensor");
+    return op->emitError("aten.add other must be an f16, f32, or bf16 tensor");
   }
 
   FailureOr<Value> castSelf =
@@ -81,9 +80,9 @@ LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
     rhs = *scaled;
   }
 
-  FailureOr<Value> sum = hip::emitElementwise(
-      builder, loc, context, packed->lhs, rhs, packed->resultType,
-      hip::ElementwiseKind::Add);
+  FailureOr<Value> sum =
+      hip::emitElementwise(builder, loc, context, packed->lhs, rhs,
+                           packed->resultType, hip::ElementwiseKind::Add);
   if (failed(sum))
     return op->emitError("aten.add failed");
 
@@ -107,4 +106,5 @@ void mlir::torch::populateTorchToHipRewrites(
     SmallVectorImpl<TorchRewrite> &rewrites) {
   rewrites.push_back({"torch.aten.add.Tensor", lowerAtenAdd});
   rewrites.push_back({"torch.aten.add.Scalar", lowerAtenAdd});
+  populateOnnxOperatorRewrites(rewrites);
 }

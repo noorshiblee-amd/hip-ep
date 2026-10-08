@@ -44,8 +44,13 @@ hip-to-llvm-pipeline   (optional)
 | Add | `torch.aten.add.Tensor`, `torch.aten.add.Scalar` |
 | Alpha | `torch.constant.int`, `torch.constant.float`, or a `!torch.int` / `!torch.float` argument |
 | Tensor literal | `torch.vtensor.literal` with a `dense` elements attribute |
+| ONNX importer op | `torch.operator "onnx.<Op>"` for `Constant`, `QuantizeLinear`, `DequantizeLinear`, `MatMul`, and `Add` |
+| Missing result type | `!torch.none`, inferred from the ONNX op before the op is emitted |
+| Unused None | `torch.constant.none` with no uses is erased |
 
-Integer tensors and `i1` tensors are rejected. Bool `aten.add` is a logical or, and an integer tensor would become an arithmetic `hip.add`. Unranked values are rejected: [hip-shape-inference.md](hip-shape-inference.md) only narrows `?` on a ranked HIP result. `dense_resource` literals are rejected because [constant-handling-design.md](constant-handling-design.md) serializes a dense payload.
+`aten.add` still rejects integer tensors and `i1` tensors. Bool `aten.add` is a logical or, and an integer tensor would become an arithmetic `hip.add`. `torch.operator "onnx.*"` accepts integer and unsigned tensors (`ui8`, `ui16`, `si32`, and the other builtin integer and float element types) because QuantizeLinear and DequantizeLinear use them. Unranked values are rejected: [hip-shape-inference.md](hip-shape-inference.md) only narrows `?` on a ranked HIP result. `torch.vtensor.literal` still rejects `dense_resource`. A `torch.onnx.value` `dense_resource` on `torch.operator "onnx.Constant"` is materialized to a `dense` payload, because [constant-handling-design.md](constant-handling-design.md) serializes inline dense data.
+
+`!torch.none` is the importer's untyped result. QuantizeLinear takes the zero-point element type and the input shape. DequantizeLinear takes the scale element type and the input shape. MatMul and Add use the operand element type; MatMul builds the ONNX matrix shape and Add broadcasts. A module with a single function is renamed to `@main_graph` after those ops are emitted, because `convert-onnx-to-hip` reads that symbol.
 
 An operation this dialect does not spell fails at parse in pretty form. The generic quoted form parses, and `convert-torch-to-hip` then reports that it has no lowering.
 

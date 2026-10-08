@@ -68,8 +68,8 @@ LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
     FailureOr<Type> converted = torch::toBuiltinType(arg.getType());
     if (failed(converted)) {
       return func.emitError()
-             << "argument " << index
-             << " has unsupported Torch type " << arg.getType()
+             << "argument " << index << " has unsupported Torch type "
+             << arg.getType()
              << "; tensor element type must be f16, f32, or bf16";
     }
     arg.setType(*converted);
@@ -154,9 +154,8 @@ LogicalResult lowerFunction(func::FuncOp func,
     if (torch::isTorchType(type))
       return func.emitError("Torch type survived conversion: ") << type;
   }
-  func.setFunctionType(FunctionType::get(func.getContext(),
-                                         func.getArgumentTypes(),
-                                         ret.getOperandTypes()));
+  func.setFunctionType(FunctionType::get(
+      func.getContext(), func.getArgumentTypes(), ret.getOperandTypes()));
   return success();
 }
 
@@ -171,8 +170,11 @@ void ConvertTorchToHipPass::runOnOperation() {
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
-  if (result.wasInterrupted())
+  if (result.wasInterrupted()) {
     signalPassFailure();
+    return;
+  }
+  torch::renameSoleOnnxEntry(module);
 }
 
 } // namespace
