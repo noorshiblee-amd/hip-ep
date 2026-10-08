@@ -536,11 +536,17 @@ void mlir::hip::buildRocMlirPipeline(
   pm.addPass(mlir::createCanonicalizerPass());
 }
 
-void mlir::hip::buildTorchToHipPipeline(
-    OpPassManager &pm, const OnnxToHipPipelineOptions &options,
-    morphizen::FileSystem *fs) {
+void mlir::hip::buildTorchToHipPipeline(OpPassManager &pm,
+                                        const OnnxToHipPipelineOptions &options,
+                                        morphizen::FileSystem *fs) {
   pm.addPass(createHipAddContextArgPass());
   pm.addPass(createConvertTorchToHipPass());
+  // torch.operator "onnx.*" is rewritten to generic onnx ops. The same
+  // conversion used by the ONNX pipeline lowers those ops to tensor-mode HIP
+  // before the shared tail bufferizes them. A Torch module that only used
+  // aten.add has no onnx ops left, and this pass only records @main_graph
+  // metadata.
+  pm.addPass(createConvertOnnxToHipPass());
   buildOnnxToHipPipelineTail(pm, options, fs);
 }
 
@@ -555,7 +561,8 @@ void mlir::hip::registerHipPipelines() {
 
   PassPipelineRegistration<OnnxToHipPipelineOptions>(
       "torch-to-hip-pipeline",
-      "Lower the accepted Torch subset to bufferized HIP memref IR",
+      "Lower the accepted Torch subset, including torch.operator onnx ops, "
+      "to bufferized HIP memref IR",
       [](OpPassManager &pm, const OnnxToHipPipelineOptions &opts) {
         buildTorchToHipPipeline(pm, opts);
       });

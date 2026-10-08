@@ -90,7 +90,7 @@ see [below](#passes-that-are-not-individually-nameable)). Prefer, in order:
 | Name | Options | What it builds |
 |---|---|---|
 | `onnx-to-hip-pipeline` | `externalize-output-dir`, `externalize-min-num-elements`, `skip-constant-data` | ONNX dialect → fully bufferized, pooled HIP memref IR with resolved extern constants. |
-| `torch-to-hip-pipeline` | same options as `onnx-to-hip-pipeline` | Accepted Torch subset → the same bufferized HIP memref IR. Inserts `!hip.context`, runs `convert-torch-to-hip`, then the ONNX pipeline tail. `hip-mlir-opt` entry point; the production compiler ingests ONNX. |
+| `torch-to-hip-pipeline` | same options as `onnx-to-hip-pipeline` | Accepted Torch subset, including `torch.operator "onnx.*"`, → the same bufferized HIP memref IR. Inserts `!hip.context`, runs `convert-torch-to-hip` and `convert-onnx-to-hip`, then the ONNX pipeline tail. `hip-mlir-opt` entry point; the production compiler ingests ONNX. |
 | `hip-to-llvm-pipeline` | `constants-file` | HIP memref IR → LLVM dialect + the C-ABI interface (`inference_init/compute/cleanup`, metadata). |
 | `hipdnn-pipeline` | `constants-file`, `constants-dir`, `externalize-min-num-elements` | The full ONNX→HIP→LLVM→interface flow (chains the two above). |
 
