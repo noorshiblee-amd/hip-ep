@@ -58,6 +58,14 @@ def AtenAddTensorOp : Torch_Op<"aten.add.Tensor", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+// Assembly matches torch-mlir: `torch.operator "name"(operands) attrs : fn-type`.
+// Regions are not accepted; the importer used here does not emit them.
+def OperatorOp : Torch_Op<"operator"> {
+  let summary = "Opaque torch operator";
+  let arguments = (ins StrAttr:$name, Variadic<AnyType>:$operands);
+  let results = (outs Variadic<AnyType>:$results);
+}
+
 def AtenAddScalarOp : Torch_Op<"aten.add.Scalar", [Pure]> {
   let summary = "self + alpha * scalar";
   let arguments = (ins

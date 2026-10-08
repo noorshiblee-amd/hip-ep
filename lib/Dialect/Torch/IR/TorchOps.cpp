@@ -128,3 +128,36 @@ void ValueTensorLiteralOp::print(OpAsmPrinter &printer) {
   printer << ") : ";
   printer.printType(getResult().getType());
 }
+
+ParseResult OperatorOp::parse(OpAsmParser &parser, OperationState &result) {
+  Attribute name;
+  SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  if (parser.parseAttribute(name, "name", result.attributes) ||
+      parser.parseLParen() || parser.parseOperandList(operands) ||
+      parser.parseRParen() || parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColon())
+    return failure();
+  if (!isa<StringAttr>(name))
+    return parser.emitError(parser.getNameLoc())
+           << "torch.operator name must be a string";
+
+  FunctionType fnType;
+  if (parser.parseType(fnType))
+    return failure();
+  if (parser.resolveOperands(operands, fnType.getInputs(), parser.getNameLoc(),
+                             result.operands))
+    return failure();
+  result.addTypes(fnType.getResults());
+  return success();
+}
+
+void OperatorOp::print(OpAsmPrinter &printer) {
+  printer << ' ';
+  printer.printAttribute(getNameAttr());
+  printer << '(';
+  printer.printOperands(getOperands());
+  printer << ')';
+  printer.printOptionalAttrDict((*this)->getAttrs(), {"name"});
+  printer << " : ";
+  printer.printFunctionalType(getOperandTypes(), getResultTypes());
+}
