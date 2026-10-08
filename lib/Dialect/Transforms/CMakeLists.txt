@@ -73,6 +73,7 @@ target_link_libraries(HipDialectTransforms PUBLIC
   HipToLLVM
   HipToTosa
   OnnxToHip
+  TorchToHip
   OnnxToHipDNN
   HipSchemasLib
   MLIRPass
