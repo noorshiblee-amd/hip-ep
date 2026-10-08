@@ -6,7 +6,7 @@
 module {
   func.func @roundtrip(%arg0: !torch.vtensor<[1,?,4],f16>, %arg1: !torch.int, %arg2: !torch.float, %arg3: !torch.bool, %arg4: !torch.vtensor<[],bf16>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @roundtrip
-    // CHECK: !torch.vtensor<[1,?,4],f16>
+    // CHECK: !torch.vtensor<[1, ?, 4],f16>
     // CHECK: !torch.int
     // CHECK: !torch.float
     // CHECK: !torch.bool

@@ -30,7 +30,7 @@ module {
 
   func.func @test_add_runtime_alpha(%lhs: !torch.vtensor<[4],f32>, %rhs: !torch.vtensor<[4],f32>, %alpha: !torch.float) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @test_add_runtime_alpha
-    // CHECK-SAME: tensor<4xf32>, tensor<4xf32>, f64
+    // CHECK-SAME: tensor<4xf32>, %arg2: tensor<4xf32>, %arg3: f64
     // CHECK: arith.truncf
     // CHECK: hip.mul
     // CHECK: hip.add
