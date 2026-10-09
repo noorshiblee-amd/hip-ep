@@ -8,6 +8,7 @@
 
 #include "hip/Conversion/TorchToHip/Passes.h"
 #include "hip/Dialect/IR/HipDialect.h"
+#include "hip/Dialect/Torch/IR/TorchOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -68,8 +69,8 @@ LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
     FailureOr<Type> converted = torch::toBuiltinType(arg.getType());
     if (failed(converted)) {
       return func.emitError()
-             << "argument " << index
-             << " has unsupported Torch type " << arg.getType()
+             << "argument " << index << " has unsupported Torch type "
+             << arg.getType()
              << "; tensor element type must be f16, f32, or bf16";
     }
     arg.setType(*converted);
@@ -119,6 +120,10 @@ LogicalResult lowerFunction(func::FuncOp func,
         continue;
       bool ready = true;
       for (Value operand : op->getOperands()) {
+        // None marks an omitted optional (convolution bias, sum dtype). The
+        // consumer drops it; it must not keep that consumer unlowered.
+        if (isa<torch::TorchNoneType>(operand.getType()))
+          continue;
         if (torch::isTorchType(operand.getType()))
           ready = false;
       }
@@ -130,6 +135,16 @@ LogicalResult lowerFunction(func::FuncOp func,
         return failure();
       progress = true;
     }
+  }
+
+  SmallVector<Operation *> leftoverNones;
+  func.walk([&](torch::ConstantNoneOp op) { leftoverNones.push_back(op); });
+  for (Operation *op : leftoverNones) {
+    if (!op->use_empty()) {
+      op->emitError("torch.constant.none still has uses");
+      return failure();
+    }
+    op->erase();
   }
 
   LogicalResult leftover = success();
@@ -154,9 +169,8 @@ LogicalResult lowerFunction(func::FuncOp func,
     if (torch::isTorchType(type))
       return func.emitError("Torch type survived conversion: ") << type;
   }
-  func.setFunctionType(FunctionType::get(func.getContext(),
-                                         func.getArgumentTypes(),
-                                         ret.getOperandTypes()));
+  func.setFunctionType(FunctionType::get(
+      func.getContext(), func.getArgumentTypes(), ret.getOperandTypes()));
   return success();
 }
 

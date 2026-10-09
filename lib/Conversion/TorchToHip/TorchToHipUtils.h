@@ -25,10 +25,10 @@ struct PackedBinary {
 };
 
 FailureOr<PackedBinary> packBinaryBroadcast(OpBuilder &builder, Location loc,
-                                             Value lhs, Value rhs,
-                                             RankedTensorType resultType);
+                                            Value lhs, Value rhs,
+                                            RankedTensorType resultType);
 
-enum class ElementwiseKind { Add, Mul };
+enum class ElementwiseKind { Add, Mul, Sub, Div, Max };
 
 FailureOr<Value> emitElementwise(OpBuilder &builder, Location loc,
                                  Value context, Value lhs, Value rhs,

@@ -42,6 +42,29 @@ Type ValueTensorType::parse(AsmParser &parser) {
   return ValueTensorType::get(parser.getContext(), sizes, dtype);
 }
 
+Type ListType::parse(AsmParser &parser) {
+  if (parser.parseLess())
+    return {};
+  Type element;
+  // The producer prints `!torch.list<int>`, not `!torch.list<!torch.int>`.
+  if (succeeded(parser.parseOptionalKeyword("int")))
+    element = IntType::get(parser.getContext());
+  else if (parser.parseType(element))
+    return {};
+  if (parser.parseGreater())
+    return {};
+  return get(parser.getContext(), element);
+}
+
+void ListType::print(AsmPrinter &printer) const {
+  printer << '<';
+  if (isa<IntType>(getElementType()))
+    printer << "int";
+  else
+    printer.printType(getElementType());
+  printer << '>';
+}
+
 void ValueTensorType::print(AsmPrinter &printer) const {
   printer << '<';
   printer << '[';

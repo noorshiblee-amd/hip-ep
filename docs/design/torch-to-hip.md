@@ -42,10 +42,16 @@ hip-to-llvm-pipeline   (optional)
 | Tensor | Ranked `!torch.vtensor<[dims],dtype>`. `?` is a dynamic dimension. |
 | Element type | `f16`, `f32`, `bf16` |
 | Add | `torch.aten.add.Tensor`, `torch.aten.add.Scalar` |
+| Sub / Mul / Div | `torch.aten.sub.Tensor`, `torch.aten.mul.Tensor`, `torch.aten.mul.Scalar`, `torch.aten.div.Scalar` |
 | Alpha | `torch.constant.int`, `torch.constant.float`, or a `!torch.int` / `!torch.float` argument |
-| Tensor literal | `torch.vtensor.literal` with a `dense` elements attribute |
+| Bool | `torch.constant.bool` |
+| List | `!torch.list<int>` built by `torch.prim.ListConstruct` of constant integers |
+| Tensor literal | `torch.vtensor.literal` with a `dense` attribute, or a `dense_resource` blob copied into one |
+| Convolution / pool | `torch.aten.convolution` (not transposed), `torch.aten.max_pool2d` |
+| Normalization helpers | `torch.aten.rsqrt`, `torch.aten.relu`, `torch.aten.unsqueeze` |
+| Reductions and shape | `torch.aten.sum.dim_IntList` (dtype `none`), `torch.aten.view`, `torch.aten.permute`, `torch.aten.broadcast_to`, `torch.aten.mm` |
 
-Integer tensors and `i1` tensors are rejected. Bool `aten.add` is a logical or, and an integer tensor would become an arithmetic `hip.add`. Unranked values are rejected: [hip-shape-inference.md](hip-shape-inference.md) only narrows `?` on a ranked HIP result. `dense_resource` literals are rejected because [constant-handling-design.md](constant-handling-design.md) serializes a dense payload.
+Integer tensors and `i1` tensors are rejected. Bool `aten.add` is a logical or, and an integer tensor would become an arithmetic `hip.add`. Unranked values are rejected: [hip-shape-inference.md](hip-shape-inference.md) only narrows `?` on a ranked HIP result. A `dense_resource` literal is copied into a `DenseElementsAttr` before it becomes `hip.constant`. A handle whose blob is absent becomes a zero splat of the declared shape. `torch.constant.none` is an omitted optional operand (convolution bias, sum dtype) and is dropped with that consumer.
 
 An operation this dialect does not spell fails at parse in pretty form. The generic quoted form parses, and `convert-torch-to-hip` then reports that it has no lowering.
 
@@ -55,7 +61,9 @@ An operation this dialect does not spell fails at parse in pretty form. The gene
 
 The result is destination-passing style: `tensor.empty` plus `hip.add`, the same tensor-mode form `convert-onnx-to-hip` emits. `hip.add` is the operation listed in [supported-operations.md](../supported-operations.md). Rank above 4 is packed to at most four dimensions inside this pass, then expanded back. The packer is the static broadcast rule already used for ONNX elementwise ops. A dynamic shape of rank 4 or less is left ranked and sized with `tensor.dim`. A dynamic shape of rank above 4 is rejected.
 
-Tensor literals become `hip.constant` carriers with a deterministic `serialization_order`. The shared tail's `hip-externalize-constants` pass applies the storage policy. Scalar Torch constants become `arith.constant` and are not carriers.
+Tensor literals become `hip.constant` carriers with a deterministic `serialization_order`. The shared tail's `hip-externalize-constants` pass applies the storage policy. Scalar Torch constants, including bools, become `arith.constant` and are not carriers. A `!torch.list<int>` of constant integers becomes `tensor<Nxi64>` before any consumer reads it.
+
+`aten.sub.Tensor` is `self - alpha * other`, with the same alpha rule as add. `aten.mul` and `aten.div.Scalar` are one `hip.mul` or `hip.div`; a scalar operand is a rank-0 tensor. `aten.rsqrt` is `hip.sqrt` then `hip.reciprocal`. `aten.relu` is `hip.max` against a rank-0 zero. `aten.unsqueeze` is `tensor.expand_shape` that groups the inserted size-1 axis with its neighbor. `aten.view` is `tensor.reshape`. `aten.permute` is `hip.transpose` (`perm[i]` is the input axis that moves to output axis `i`). `aten.broadcast_to` is `hip.expand`. `aten.mm` is `hip.matmul`. `aten.sum.dim_IntList` is `hip.reduce_sum` after negative axes are rewritten against the input rank. `aten.convolution` and `aten.max_pool2d` take one padding value per spatial axis and apply it to both sides; `hip.conv` and `hip.pool` receive that padding as begin axes followed by end axes. Convolution bias `none` is omitted. These rewrites require static shapes.
 
 After the pass, a live `torch.*` operation or `!torch.*` type is an error. Graph outputs and transient buffers are unchanged from the ONNX tail: outputs are allocated with `hip.alloc_output`, and other transients are pooled. See [output-allocator-design.md](output-allocator-design.md) and [pool-allocs-memory-planning.md](pool-allocs-memory-planning.md).
 

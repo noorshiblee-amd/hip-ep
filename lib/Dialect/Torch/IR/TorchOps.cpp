@@ -29,8 +29,9 @@ ParseResult torch::parseDefaultTorchOp(OpAsmParser &parser,
   if (numResults > 0 &&
       (parser.parseArrow() || parser.parseTypeList(resultTypes)))
     return failure();
-  if (static_cast<int>(operands.size()) != numOperands ||
-      static_cast<int>(operandTypes.size()) != numOperands ||
+  // A negative operand count accepts a variadic operand list.
+  if (operands.size() != operandTypes.size() ||
+      (numOperands >= 0 && static_cast<int>(operands.size()) != numOperands) ||
       static_cast<int>(resultTypes.size()) != numResults) {
     return parser.emitError(parser.getNameLoc())
            << "expected " << numOperands << " operands and " << numResults
@@ -64,8 +65,52 @@ void torch::printDefaultTorchOp(OpAsmPrinter &printer, Operation *op) {
 
 TORCH_DEFAULT_FORM(AtenAddTensorOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenAddScalarOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenSubTensorOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenMulTensorOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenMulScalarOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenDivScalarOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenRsqrtOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenReluOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenUnsqueezeOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenViewOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenPermuteOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenBroadcastToOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenMmOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenSumDimIntListOp, 4, 1)
+TORCH_DEFAULT_FORM(AtenMaxPool2dOp, 6, 1)
+TORCH_DEFAULT_FORM(AtenConvolutionOp, 9, 1)
 
 #undef TORCH_DEFAULT_FORM
+
+// The producer prints ` : (operand-types) -> result-types`. The default
+// printer omits the parentheses. Both forms are accepted.
+ParseResult PrimListConstructOp::parse(OpAsmParser &parser,
+                                       OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  SmallVector<Type> operandTypes;
+  SmallVector<Type> resultTypes;
+  if (parser.parseOperandList(operands) || parser.parseColon())
+    return failure();
+  bool wrapped = succeeded(parser.parseOptionalLParen());
+  if (parser.parseTypeList(operandTypes))
+    return failure();
+  if (wrapped && parser.parseRParen())
+    return failure();
+  if (parser.parseArrow() || parser.parseTypeList(resultTypes))
+    return failure();
+  if (operandTypes.size() != operands.size() || resultTypes.size() != 1) {
+    return parser.emitError(parser.getNameLoc()) << "expected one list result";
+  }
+  if (parser.resolveOperands(operands, operandTypes, parser.getNameLoc(),
+                             result.operands))
+    return failure();
+  result.addTypes(resultTypes);
+  return success();
+}
+
+void PrimListConstructOp::print(OpAsmPrinter &printer) {
+  printDefaultTorchOp(printer, *this);
+}
 
 ParseResult ConstantIntOp::parse(OpAsmParser &parser, OperationState &result) {
   int64_t value = 0;
@@ -106,6 +151,21 @@ void ConstantNoneOp::print(OpAsmPrinter &printer) {
   printer.printOptionalAttrDict((*this)->getAttrs());
 }
 
+ParseResult ConstantBoolOp::parse(OpAsmParser &parser, OperationState &result) {
+  bool value = false;
+  if (succeeded(parser.parseOptionalKeyword("true")))
+    value = true;
+  else if (parser.parseKeyword("false"))
+    return failure();
+  result.addAttribute("value", BoolAttr::get(parser.getContext(), value));
+  result.addTypes(TorchBoolType::get(parser.getContext()));
+  return success();
+}
+
+void ConstantBoolOp::print(OpAsmPrinter &printer) {
+  printer << ' ' << (getValue() ? "true" : "false");
+}
+
 ParseResult ValueTensorLiteralOp::parse(OpAsmParser &parser,
                                         OperationState &result) {
   Attribute attr;
@@ -113,7 +173,7 @@ ParseResult ValueTensorLiteralOp::parse(OpAsmParser &parser,
   if (parser.parseLParen() || parser.parseAttribute(attr) ||
       parser.parseRParen() || parser.parseColon() || parser.parseType(type))
     return failure();
-  if (isa<DenseResourceElementsAttr>(attr) || !isa<DenseElementsAttr>(attr)) {
+  if (!isa<DenseElementsAttr>(attr) && !isa<DenseResourceElementsAttr>(attr)) {
     return parser.emitError(parser.getNameLoc())
            << "torch.vtensor.literal requires a dense elements attribute";
   }

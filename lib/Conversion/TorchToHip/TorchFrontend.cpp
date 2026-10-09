@@ -11,6 +11,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
+#include "llvm/ADT/APFloat.h"
+
 #include <limits>
 
 using namespace mlir;
@@ -21,7 +23,7 @@ bool mlir::torch::isTorchDialectOp(Operation *op) {
 }
 
 bool mlir::torch::isTorchType(Type type) {
-  return isa<IntType, TorchFloatType, TorchBoolType, TorchNoneType,
+  return isa<IntType, TorchFloatType, TorchBoolType, TorchNoneType, ListType,
              ValueTensorType>(type);
 }
 
@@ -54,6 +56,48 @@ FailureOr<Type> mlir::torch::toBuiltinType(Type type) {
   return type;
 }
 
+// `dense_resource` blobs are raw element bytes. The textual alignment prefix
+// is stripped by the parser before `getData()`. A handle with no blob is a
+// zero splat: some producers elide the payload and still name the shape.
+static FailureOr<DenseElementsAttr>
+materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
+  Attribute attr = literal.getValue();
+  if (auto dense = dyn_cast<DenseElementsAttr>(attr)) {
+    if (dense.getType() != resultType) {
+      return literal.emitError(
+          "torch.vtensor.literal payload type does not match its result type");
+    }
+    return dense;
+  }
+  auto resource = dyn_cast<DenseResourceElementsAttr>(attr);
+  if (!resource) {
+    return literal.emitError(
+        "torch.vtensor.literal requires a dense elements attribute");
+  }
+  auto shaped = dyn_cast<ShapedType>(resource.getType());
+  if (!shaped || shaped != resultType) {
+    return literal.emitError(
+        "torch.vtensor.literal payload type does not match its result type");
+  }
+  ArrayRef<char> data = resource.getData();
+  if (data.empty() && resultType.getNumElements() != 0) {
+    literal.emitWarning(
+        "dense_resource has no payload; lowering a zero tensor");
+    auto floatType = dyn_cast<FloatType>(resultType.getElementType());
+    if (!floatType)
+      return literal.emitError("zero literal requires a float element type");
+    auto zero = FloatAttr::get(floatType,
+                               APFloat::getZero(floatType.getFloatSemantics()));
+    return DenseElementsAttr(SplatElementsAttr::get(resultType, zero));
+  }
+  bool splat = false;
+  if (!DenseElementsAttr::isValidRawBuffer(resultType, data, splat)) {
+    return literal.emitError(
+        "torch.vtensor.literal dense_resource payload does not match its type");
+  }
+  return DenseElementsAttr::getFromRawBuffer(resultType, data);
+}
+
 static LogicalResult literalTensorType(ValueTensorLiteralOp literal,
                                        RankedTensorType &resultType) {
   FailureOr<RankedTensorType> converted =
@@ -61,15 +105,6 @@ static LogicalResult literalTensorType(ValueTensorLiteralOp literal,
   if (failed(converted)) {
     return literal.emitError(
         "torch.vtensor.literal element type must be f16, f32, or bf16");
-  }
-  auto dense = dyn_cast<DenseElementsAttr>(literal.getValue());
-  if (!dense || isa<DenseResourceElementsAttr>(literal.getValue())) {
-    return literal.emitError(
-        "torch.vtensor.literal requires a dense elements attribute");
-  }
-  if (dense.getType() != *converted) {
-    return literal.emitError(
-        "torch.vtensor.literal payload type does not match its result type");
   }
   resultType = *converted;
   return success();
@@ -85,12 +120,18 @@ CarrierResult mlir::torch::lowerTorchCarrier(Operation *op,
     integer.erase();
     return CarrierResult::Lowered;
   }
+  if (auto flag = dyn_cast<ConstantBoolOp>(op)) {
+    auto constant = arith::ConstantOp::create(
+        builder, op->getLoc(), builder.getBoolAttr(flag.getValue()));
+    flag.getResult().replaceAllUsesWith(constant.getResult());
+    flag.erase();
+    return CarrierResult::Lowered;
+  }
+  // A used None stays until the consumer drops the optional operand. An
+  // unused None has no consumer and is erased here.
   if (isa<ConstantNoneOp>(op)) {
-    if (!op->use_empty()) {
-      op->emitError("torch.constant.none has uses; optional None operands "
-                    "are not lowered");
-      return CarrierResult::Failed;
-    }
+    if (!op->use_empty())
+      return CarrierResult::NotCarrier;
     op->erase();
     return CarrierResult::Lowered;
   }
@@ -114,9 +155,11 @@ CarrierResult mlir::torch::lowerTorchCarrier(Operation *op,
     return CarrierResult::Failed;
   }
 
-  auto dense = cast<DenseElementsAttr>(literal.getValue());
+  FailureOr<DenseElementsAttr> dense = materializeLiteral(literal, tensorType);
+  if (failed(dense))
+    return CarrierResult::Failed;
   auto carrier =
-      hip::ConstantOp::create(builder, literal.getLoc(), tensorType, dense);
+      hip::ConstantOp::create(builder, literal.getLoc(), tensorType, *dense);
   carrier.setSerializationOrderAttr(
       builder.getI64IntegerAttr(serializationOrder++));
   literal.replaceAllUsesWith(carrier.getResult());

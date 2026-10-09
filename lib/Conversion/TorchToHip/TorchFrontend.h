@@ -29,7 +29,8 @@ FailureOr<Type> toBuiltinType(Type type);
 /// type. Fails for every other type.
 FailureOr<RankedTensorType> toBuiltinTensorType(Type type);
 
-/// Lowers torch.constant.int, torch.constant.float, and torch.vtensor.literal.
+/// Lowers torch.constant.int, torch.constant.float, torch.constant.bool, and
+/// torch.vtensor.literal. A used torch.constant.none is left for its consumer.
 /// `NotCarrier` leaves the operation alone. `Failed` has already diagnosed.
 enum class CarrierResult { NotCarrier, Lowered, Failed };
 

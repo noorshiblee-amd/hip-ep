@@ -33,6 +33,14 @@ def TorchNoneType : Torch_Type<"TorchNone", "none"> {
   let summary = "Torch singleton None";
 }
 
+// Printed as `!torch.list<int>`. The element mnemonic is custom because the
+// producer writes `int`, not `!torch.int`, inside the angle brackets.
+def ListType : Torch_Type<"List", "list"> {
+  let summary = "Torch list";
+  let parameters = (ins "mlir::Type":$elementType);
+  let hasCustomAssemblyFormat = 1;
+}
+
 def ValueTensorType : Torch_Type<"ValueTensor", "vtensor"> {
   let summary = "Ranked value-semantic Torch tensor";
   let description = [{

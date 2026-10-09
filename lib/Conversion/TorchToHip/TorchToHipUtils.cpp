@@ -88,8 +88,7 @@ FailureOr<Value> rightAlignTensor(OpBuilder &builder, Location loc, Value value,
   int64_t leadingOnes = targetRank - type.getRank();
   SmallVector<int64_t> alignedShape(leadingOnes, 1);
   llvm::append_range(alignedShape, type.getShape());
-  auto alignedType =
-      RankedTensorType::get(alignedShape, type.getElementType());
+  auto alignedType = RankedTensorType::get(alignedShape, type.getElementType());
 
   SmallVector<ReassociationIndices> reassociation;
   ReassociationIndices firstGroup;
@@ -232,8 +231,8 @@ mlir::hip::packBinaryBroadcast(OpBuilder &builder, Location loc, Value lhs,
   PackedBinary packed;
   packed.lhs = *packedLhs;
   packed.rhs = *packedRhs;
-  packed.resultType = RankedTensorType::get(packedResultShape,
-                                            resultType.getElementType());
+  packed.resultType =
+      RankedTensorType::get(packedResultShape, resultType.getElementType());
   packed.reassociation = std::move(chosen);
   packed.needsExpand = true;
   return packed;
@@ -247,13 +246,26 @@ FailureOr<Value> mlir::hip::emitElementwise(OpBuilder &builder, Location loc,
       createBroadcastEmptyTensor(builder, loc, resultType, {lhs, rhs});
   if (failed(init))
     return failure();
-  if (kind == ElementwiseKind::Add) {
-    auto op =
-        hip::AddOp::create(builder, loc, context, lhs, rhs, *init);
-    return op->getResult(0);
+  Operation *created = nullptr;
+  switch (kind) {
+  case ElementwiseKind::Add:
+    created = hip::AddOp::create(builder, loc, context, lhs, rhs, *init);
+    break;
+  case ElementwiseKind::Mul:
+    created = hip::MulOp::create(builder, loc, context, lhs, rhs, *init);
+    break;
+  case ElementwiseKind::Sub:
+    created = hip::SubOp::create(builder, loc, context, lhs, rhs, *init);
+    break;
+  case ElementwiseKind::Div:
+    created = hip::DivOp::create(builder, loc, context, lhs, rhs, *init);
+    break;
+  case ElementwiseKind::Max:
+    created =
+        hip::MaxOp::create(builder, loc, resultType, context, lhs, rhs, *init);
+    break;
   }
-  auto op = hip::MulOp::create(builder, loc, context, lhs, rhs, *init);
-  return op->getResult(0);
+  return created->getResult(0);
 }
 
 FailureOr<Value> mlir::hip::castToElementType(OpBuilder &builder, Location loc,
@@ -275,8 +287,7 @@ FailureOr<Value> mlir::hip::castToElementType(OpBuilder &builder, Location loc,
   if (onnxDataType == 0)
     return failure();
 
-  auto resultType =
-      RankedTensorType::get(inputType.getShape(), elementType);
+  auto resultType = RankedTensorType::get(inputType.getShape(), elementType);
   FailureOr<Value> init =
       createBroadcastEmptyTensor(builder, loc, resultType, {input});
   if (failed(init))
@@ -286,23 +297,21 @@ FailureOr<Value> mlir::hip::castToElementType(OpBuilder &builder, Location loc,
   return castOp->getResult(0);
 }
 
-FailureOr<Value>
-mlir::hip::materializeScalarTensor(OpBuilder &builder, Location loc,
-                                   Value scalar, Type elementType) {
+FailureOr<Value> mlir::hip::materializeScalarTensor(OpBuilder &builder,
+                                                    Location loc, Value scalar,
+                                                    Type elementType) {
   if (!isa<FloatType>(elementType))
     return failure();
   Type sourceType = scalar.getType();
   Value converted = scalar;
   if (sourceType != elementType) {
     if (sourceType.isIntOrIndex()) {
-      converted =
-          arith::SIToFPOp::create(builder, loc, elementType, scalar);
+      converted = arith::SIToFPOp::create(builder, loc, elementType, scalar);
     } else if (isa<FloatType>(sourceType)) {
       unsigned sourceBits = cast<FloatType>(sourceType).getWidth();
       unsigned destBits = cast<FloatType>(elementType).getWidth();
       if (sourceBits > destBits) {
-        converted =
-            arith::TruncFOp::create(builder, loc, elementType, scalar);
+        converted = arith::TruncFOp::create(builder, loc, elementType, scalar);
       } else if (sourceBits < destBits) {
         converted = arith::ExtFOp::create(builder, loc, elementType, scalar);
       } else {
@@ -313,8 +322,7 @@ mlir::hip::materializeScalarTensor(OpBuilder &builder, Location loc,
     }
   }
   auto resultType = RankedTensorType::get({}, elementType);
-  return Value(
-      tensor::SplatOp::create(builder, loc, resultType, converted));
+  return Value(tensor::SplatOp::create(builder, loc, resultType, converted));
 }
 
 bool mlir::hip::isUnitScalar(Value value) {
