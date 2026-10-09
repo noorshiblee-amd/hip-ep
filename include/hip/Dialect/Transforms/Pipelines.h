@@ -89,6 +89,15 @@ void buildOnnxToHipPipelineTail(OpPassManager &pm,
                                 const OnnxToHipPipelineOptions &options,
                                 morphizen::FileSystem *fs = nullptr);
 
+/// Lower an accepted Torch module to bufferized HIP memref IR.
+///
+/// Inserts `!hip.context`, lowers the Torch subset to tensor-mode HIP, then
+/// runs the same tail as the ONNX pipeline. The production compiler still
+/// ingests ONNX; this entry point is for a Torch module.
+void buildTorchToHipPipeline(OpPassManager &pm,
+                             const OnnxToHipPipelineOptions &options,
+                             morphizen::FileSystem *fs = nullptr);
+
 /// Build the ONNX-to-HIP compilation pipeline.
 ///
 /// Converts ONNX-level tensor IR into fully bufferized HIP memref IR with

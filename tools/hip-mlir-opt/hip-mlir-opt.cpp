@@ -10,6 +10,7 @@
 #include "hip/Dialect/IR/HipBufferize.h"
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Onnx/IR/OnnxDialect.h"
+#include "hip/Dialect/Torch/IR/TorchDialect.h"
 #include "hip/Dialect/Transforms/Passes.h"
 #include "hip/Dialect/Transforms/Pipelines.h"
 
@@ -85,6 +86,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
+  // Torch is a tool-side parser for an external module. The production
+  // compiler still ingests ONNX and does not load this dialect.
+  registry.insert<mlir::torch::TorchDialect>();
   registry.insert<mlir::pdl::PDLDialect>();
   registry.insert<mlir::pdl_interp::PDLInterpDialect>();
   registry.insert<mlir::ub::UBDialect>();

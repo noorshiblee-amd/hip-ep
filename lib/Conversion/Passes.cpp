@@ -4,6 +4,7 @@
  */
 
 #include "hip/Conversion/Passes.h"
+#include "hip/Conversion/TorchToHip/Passes.h"
 #include "mlir/Pass/Pass.h"
 
 namespace hip::compiler {
@@ -11,6 +12,10 @@ namespace hip::compiler {
 void registerConversionPasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return mlir::hip::createConvertOnnxToHipPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return mlir::hip::createConvertTorchToHipPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

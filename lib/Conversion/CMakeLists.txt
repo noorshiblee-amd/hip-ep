@@ -6,6 +6,7 @@
 message(STATUS "Building Conversion Libraries")
 
 add_subdirectory(OnnxToHip)
+add_subdirectory(TorchToHip)
 add_subdirectory(OnnxToHipsr)
 add_subdirectory(OnnxToHipDNN)
 add_subdirectory(HipToLLVM)
@@ -21,6 +22,7 @@ add_dependencies(HipConversion HipsrConversionPassIncGen)
 
 target_link_libraries(HipConversion PUBLIC
   OnnxToHip
+  TorchToHip
   OnnxToHipsr
   OnnxToHipDNN
   HipToLLVM
