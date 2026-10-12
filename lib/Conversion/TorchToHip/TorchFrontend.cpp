@@ -24,7 +24,8 @@ bool mlir::torch::isTorchDialectOp(Operation *op) {
 
 bool mlir::torch::isTorchType(Type type) {
   return isa<IntType, TorchFloatType, TorchBoolType, TorchNoneType, ListType,
-             ValueTensorType>(type);
+             ValueTensorType, DeviceType, TorchStringType, BareTensorType,
+             OptionalTensorType>(type);
 }
 
 bool mlir::torch::isAcceptedFloatElementType(Type elementType) {

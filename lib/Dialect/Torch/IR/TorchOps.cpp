@@ -79,6 +79,38 @@ TORCH_DEFAULT_FORM(AtenMmOp, 2, 1)
 TORCH_DEFAULT_FORM(AtenSumDimIntListOp, 4, 1)
 TORCH_DEFAULT_FORM(AtenMaxPool2dOp, 6, 1)
 TORCH_DEFAULT_FORM(AtenConvolutionOp, 9, 1)
+TORCH_DEFAULT_FORM(AtenExpandOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenBmmOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenVarMeanCorrectionOp, 4, 2)
+TORCH_DEFAULT_FORM(AtenWhereSelfOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenScalarTensorOp, 5, 1)
+TORCH_DEFAULT_FORM(AtenFullLikeOp, 7, 1)
+TORCH_DEFAULT_FORM(AtenCloneOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenSoftmaxOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenEqScalarOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenAllDimOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenAssertTensorMetadataOp, 6, 0)
+TORCH_DEFAULT_FORM(AtenArangeStartStepOp, 7, 1)
+TORCH_DEFAULT_FORM(AtenSliceTensorOp, 5, 1)
+TORCH_DEFAULT_FORM(AtenUpsampleNearest2dVecOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenDivTensorOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenBitwiseAndTensorOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenEmptyStridedOp, 6, 1)
+TORCH_DEFAULT_FORM(PrimsConvertElementTypeOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenCatOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenCumsumOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenSinOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenCosOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenIntBoolOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenGeScalarOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenIndexTensorOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenMaxPool2dWithIndicesOp, 6, 2)
+TORCH_DEFAULT_FORM(AtenSelectIntOp, 3, 1)
+TORCH_DEFAULT_FORM(PrimNumToTensorScalarOp, 1, 1)
+TORCH_DEFAULT_FORM(AtenDivTensorModeOp, 3, 1)
+TORCH_DEFAULT_FORM(AtenPowScalarOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenRepeatOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenSigmoidOp, 1, 1)
 
 #undef TORCH_DEFAULT_FORM
 
@@ -92,10 +124,13 @@ ParseResult PrimListConstructOp::parse(OpAsmParser &parser,
   if (parser.parseOperandList(operands) || parser.parseColon())
     return failure();
   bool wrapped = succeeded(parser.parseOptionalLParen());
-  if (parser.parseTypeList(operandTypes))
-    return failure();
-  if (wrapped && parser.parseRParen())
-    return failure();
+  // `()` is an empty list. parseTypeList rejects that form.
+  if (!(wrapped && succeeded(parser.parseOptionalRParen()))) {
+    if (parser.parseTypeList(operandTypes))
+      return failure();
+    if (wrapped && parser.parseRParen())
+      return failure();
+  }
   if (parser.parseArrow() || parser.parseTypeList(resultTypes))
     return failure();
   if (operandTypes.size() != operands.size() || resultTypes.size() != 1) {
@@ -164,6 +199,42 @@ ParseResult ConstantBoolOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void ConstantBoolOp::print(OpAsmPrinter &printer) {
   printer << ' ' << (getValue() ? "true" : "false");
+}
+
+static ParseResult parseStringConstant(OpAsmParser &parser, OperationState &result,
+                                Type resultType) {
+  Attribute attr;
+  if (parser.parseAttribute(attr))
+    return failure();
+  auto value = dyn_cast<StringAttr>(attr);
+  if (!value) {
+    return parser.emitError(parser.getNameLoc())
+           << "expected a string constant";
+  }
+  result.addAttribute("value", value);
+  result.addTypes(resultType);
+  return success();
+}
+
+ParseResult ConstantDeviceOp::parse(OpAsmParser &parser,
+                                    OperationState &result) {
+  return parseStringConstant(parser, result,
+                             DeviceType::get(parser.getContext()));
+}
+
+void ConstantDeviceOp::print(OpAsmPrinter &printer) {
+  printer << ' ';
+  printer.printAttribute(getValueAttr());
+}
+
+ParseResult ConstantStrOp::parse(OpAsmParser &parser, OperationState &result) {
+  return parseStringConstant(parser, result,
+                             TorchStringType::get(parser.getContext()));
+}
+
+void ConstantStrOp::print(OpAsmPrinter &printer) {
+  printer << ' ';
+  printer.printAttribute(getValueAttr());
 }
 
 ParseResult ValueTensorLiteralOp::parse(OpAsmParser &parser,

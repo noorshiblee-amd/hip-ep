@@ -114,17 +114,25 @@ LogicalResult lowerFunction(func::FuncOp func,
       if (torch::isTorchDialectOp(op))
         pending.push_back(op);
     });
+    int before = static_cast<int>(pending.size());
     for (Operation *op : pending) {
       auto it = byName.find(op->getName().getStringRef());
       if (it == byName.end())
         continue;
       bool ready = true;
       for (Value operand : op->getOperands()) {
-        // None marks an omitted optional (convolution bias, sum dtype). The
-        // consumer drops it; it must not keep that consumer unlowered.
-        if (isa<torch::TorchNoneType>(operand.getType()))
+        // None, device, and string operands are dropped by the consumer.
+        // An integer list must already be an i64 tensor. A tensor list stays
+        // a ListConstruct so cat and index can read its elements.
+        Type type = operand.getType();
+        if (isa<torch::TorchNoneType, torch::DeviceType, torch::TorchStringType>(
+                type))
           continue;
-        if (torch::isTorchType(operand.getType()))
+        if (auto list = dyn_cast<torch::ListType>(type)) {
+          if (!isa<torch::IntType>(list.getElementType()))
+            continue;
+        }
+        if (torch::isTorchType(type))
           ready = false;
       }
       if (!ready)
@@ -133,15 +141,29 @@ LogicalResult lowerFunction(func::FuncOp func,
       Value context = func.getArgument(0);
       if (failed(it->second(op, builder, context)))
         return failure();
-      progress = true;
+      // The rewrite may have erased `op`. Do not touch it after this point.
     }
+    int after = 0;
+    func.walk([&](Operation *op) {
+      if (torch::isTorchDialectOp(op))
+        ++after;
+    });
+    // A rewrite that leaves its op in place (a tensor list waiting on cat or
+    // index) must not count as progress, or this loop never finishes.
+    if (after < before)
+      progress = true;
   }
 
-  SmallVector<Operation *> leftoverNones;
-  func.walk([&](torch::ConstantNoneOp op) { leftoverNones.push_back(op); });
-  for (Operation *op : leftoverNones) {
+  SmallVector<Operation *> droppedCarriers;
+  func.walk([&](Operation *op) {
+    StringRef name = op->getName().getStringRef();
+    if (name == "torch.constant.none" || name == "torch.constant.device" ||
+        name == "torch.constant.str" || name == "torch.prim.ListConstruct")
+      droppedCarriers.push_back(op);
+  });
+  for (Operation *op : droppedCarriers) {
     if (!op->use_empty()) {
-      op->emitError("torch.constant.none still has uses");
+      op->emitError("still has uses after Torch-to-HIP conversion");
       return failure();
     }
     op->erase();

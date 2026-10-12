@@ -22,6 +22,8 @@ using namespace mlir;
 
 namespace {
 
+FailureOr<int64_t> readI64Scalar(Value value);
+
 LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
                                bool scalarOther, hip::ElementwiseKind kind,
                                StringRef name) {
@@ -112,7 +114,46 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   return success();
 }
 
+LogicalResult lowerIntegerAddScalar(Operation *op, OpBuilder &builder,
+                                    Value context) {
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || !inputType.hasStaticShape() ||
+      !inputType.getElementType().isInteger(64)) {
+    return op->emitError("integer aten.add.Scalar requires a static i64 tensor");
+  }
+  FailureOr<int64_t> other = readI64Scalar(op->getOperand(1));
+  FailureOr<int64_t> alpha = readI64Scalar(op->getOperand(2));
+  if (failed(other) || failed(alpha))
+    return op->emitError("integer aten.add.Scalar operands must be constant");
+  // self + alpha * other. Either factor being zero leaves self unchanged.
+  if (*other == 0 || *alpha == 0) {
+    op->getResult(0).replaceAllUsesWith(op->getOperand(0));
+    op->erase();
+    return success();
+  }
+  Location loc = op->getLoc();
+  Value delta = arith::ConstantOp::create(
+      builder, loc, builder.getI64IntegerAttr(*alpha * *other));
+  auto scalarType = RankedTensorType::get({}, inputType.getElementType());
+  Value deltaTensor =
+      tensor::SplatOp::create(builder, loc, scalarType, delta);
+  FailureOr<Value> result = hip::emitElementwise(
+      builder, loc, context, op->getOperand(0), deltaTensor, inputType,
+      hip::ElementwiseKind::Add);
+  if (failed(result))
+    return op->emitError("integer aten.add.Scalar failed");
+  op->getResult(0).replaceAllUsesWith(*result);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
+  if (auto valueTensor =
+          dyn_cast<torch::ValueTensorType>(op->getResult(0).getType())) {
+    if (isa<IntegerType>(valueTensor.getDtype()) &&
+        op->getName().getStringRef() == "torch.aten.add.Scalar")
+      return lowerIntegerAddScalar(op, builder, context);
+  }
   bool scalarOther = op->getName().getStringRef() == "torch.aten.add.Scalar";
   return lowerAlphaBinary(op, builder, context, scalarOther,
                           hip::ElementwiseKind::Add, "aten.add");
@@ -121,6 +162,24 @@ LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
 LogicalResult lowerAtenSub(Operation *op, OpBuilder &builder, Value context) {
   return lowerAlphaBinary(op, builder, context, /*scalarOther=*/false,
                           hip::ElementwiseKind::Sub, "aten.sub");
+}
+
+// Shape ops keep the input element type, so an i1 or i64 tensor can be
+// viewed or unsqueezed. Arithmetic ops stay on the float helper below.
+FailureOr<RankedTensorType> shapedResultType(Operation *op, StringRef name) {
+  if (op->getNumResults() != 1) {
+    op->emitError() << name << " expects 1 result";
+    return failure();
+  }
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!valueTensor || !inputType) {
+    op->emitError() << name << " requires a ranked tensor";
+    return failure();
+  }
+  return RankedTensorType::get(valueTensor.getSizes(),
+                               inputType.getElementType());
 }
 
 FailureOr<RankedTensorType> floatResultType(Operation *op, StringRef name) {
@@ -197,6 +256,12 @@ LogicalResult lowerAtenMulTensor(Operation *op, OpBuilder &builder,
                                  Value context) {
   return lowerTensorBinary(op, builder, context, hip::ElementwiseKind::Mul,
                            "aten.mul");
+}
+
+LogicalResult lowerAtenDivTensor(Operation *op, OpBuilder &builder,
+                                 Value context) {
+  return lowerTensorBinary(op, builder, context, hip::ElementwiseKind::Div,
+                           "aten.div");
 }
 
 LogicalResult lowerAtenMulScalar(Operation *op, OpBuilder &builder,
@@ -317,6 +382,12 @@ LogicalResult normalizeAxis(int64_t &axis, int64_t rank) {
 
 LogicalResult lowerListConstruct(Operation *op, OpBuilder &builder,
                                  Value /*context*/) {
+  // Tensor lists are read by cat and index. Leave the op; the driver erases
+  // it once those users are gone.
+  if (auto listType = dyn_cast<torch::ListType>(op->getResult(0).getType())) {
+    if (!isa<torch::IntType>(listType.getElementType()))
+      return success();
+  }
   SmallVector<int64_t> values;
   values.reserve(op->getNumOperands());
   for (Value operand : op->getOperands()) {
@@ -345,7 +416,7 @@ LogicalResult lowerAtenUnsqueeze(Operation *op, OpBuilder &builder,
   if (op->getNumOperands() != 2)
     return op->emitError("aten.unsqueeze expects 2 operands");
   FailureOr<RankedTensorType> resultType =
-      floatResultType(op, "aten.unsqueeze");
+      shapedResultType(op, "aten.unsqueeze");
   if (failed(resultType))
     return failure();
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
@@ -391,7 +462,7 @@ LogicalResult lowerAtenView(Operation *op, OpBuilder &builder,
                             Value /*context*/) {
   if (op->getNumOperands() != 2)
     return op->emitError("aten.view expects 2 operands");
-  FailureOr<RankedTensorType> resultType = floatResultType(op, "aten.view");
+  FailureOr<RankedTensorType> resultType = shapedResultType(op, "aten.view");
   if (failed(resultType) || !resultType->hasStaticShape())
     return failed(resultType)
                ? failure()
@@ -636,6 +707,7 @@ void mlir::torch::populateTorchToHipRewrites(
   rewrites.push_back({"torch.aten.mul.Tensor", lowerAtenMulTensor});
   rewrites.push_back({"torch.aten.mul.Scalar", lowerAtenMulScalar});
   rewrites.push_back({"torch.aten.div.Scalar", lowerAtenDivScalar});
+  rewrites.push_back({"torch.aten.div.Tensor", lowerAtenDivTensor});
   rewrites.push_back({"torch.aten.rsqrt", lowerAtenRsqrt});
   rewrites.push_back({"torch.aten.relu", lowerAtenRelu});
   rewrites.push_back({"torch.prim.ListConstruct", lowerListConstruct});
@@ -647,4 +719,5 @@ void mlir::torch::populateTorchToHipRewrites(
   rewrites.push_back({"torch.aten.sum.dim_IntList", lowerAtenSum});
   rewrites.push_back({"torch.aten.max_pool2d", lowerAtenMaxPool});
   rewrites.push_back({"torch.aten.convolution", lowerAtenConvolution});
+  populateTorchModelRewrites(rewrites);
 }

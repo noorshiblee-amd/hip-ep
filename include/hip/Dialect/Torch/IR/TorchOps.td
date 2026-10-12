@@ -55,9 +55,21 @@ def ValueTensorLiteralOp : Torch_Op<"vtensor.literal", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def ConstantDeviceOp : Torch_Op<"constant.device", [Pure]> {
+  let summary = "Torch device constant";
+  let arguments = (ins StrAttr:$value);
+  let results = (outs DeviceType:$result);
+}
+
+def ConstantStrOp : Torch_Op<"constant.str", [Pure]> {
+  let summary = "Torch string constant";
+  let arguments = (ins StrAttr:$value);
+  let results = (outs TorchStringType:$result);
+}
+
 def PrimListConstructOp : Torch_Op<"prim.ListConstruct", [Pure]> {
-  let summary = "Build a Torch list from scalar elements";
-  let arguments = (ins Variadic<IntType>:$elements);
+  let summary = "Build a Torch list";
+  let arguments = (ins Variadic<AnyType>:$elements);
   let results = (outs ListType:$result);
 }
 
@@ -202,6 +214,259 @@ def AtenConvolutionOp : Torch_Op<"aten.convolution", [Pure]> {
     ListType:$output_padding,
     IntType:$groups
   );
+  let results = (outs ValueTensorType:$result);
+}
+
+// Ops below are the pretty forms emitted by a full torch-mlir export. Optional
+// trailing operands are AnyType because the producer mixes none, int, bool,
+// and Device in the same slot.
+
+def AtenExpandOp : Torch_Op<"aten.expand", [Pure]> {
+  let summary = "Broadcast to a shape list";
+  let arguments = (ins ValueTensorType:$self, ListType:$size, TorchBoolType:$implicit);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenBmmOp : Torch_Op<"aten.bmm", [Pure]> {
+  let summary = "Batched matrix product";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$mat2);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenVarMeanCorrectionOp : Torch_Op<"aten.var_mean.correction", [Pure]> {
+  let summary = "Variance and mean";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$dim,
+    IntType:$correction,
+    TorchBoolType:$keepdim
+  );
+  let results = (outs ValueTensorType:$var, ValueTensorType:$mean);
+}
+
+def AtenWhereSelfOp : Torch_Op<"aten.where.self", [Pure]> {
+  let summary = "Select elements from two tensors";
+  let arguments = (ins
+    ValueTensorType:$condition,
+    ValueTensorType:$self,
+    ValueTensorType:$other
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenScalarTensorOp : Torch_Op<"aten.scalar_tensor", [Pure]> {
+  let summary = "Rank-0 tensor holding one scalar";
+  let arguments = (ins
+    AnyType:$value,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    AnyType:$pin_memory
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenFullLikeOp : Torch_Op<"aten.full_like", [Pure]> {
+  let summary = "Tensor filled with a scalar, shaped like self";
+  let arguments = (ins
+    ValueTensorType:$self,
+    AnyType:$fill_value,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    TorchBoolType:$pin_memory,
+    AnyType:$memory_format
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenCloneOp : Torch_Op<"aten.clone", [Pure]> {
+  let summary = "Value-semantic copy";
+  let arguments = (ins ValueTensorType:$self, IntType:$memory_format);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSoftmaxOp : Torch_Op<"aten._softmax", [Pure]> {
+  let summary = "Softmax over one dimension";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$half_to_float);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEqScalarOp : Torch_Op<"aten.eq.Scalar", [Pure]> {
+  let summary = "Elementwise equality with a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAllDimOp : Torch_Op<"aten.all.dim", [Pure]> {
+  let summary = "Logical and along one dimension";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$keepdim);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAssertTensorMetadataOp : Torch_Op<"aten._assert_tensor_metadata"> {
+  let summary = "Dropped tensor-metadata assertion";
+  let arguments = (ins
+    AnyType:$self,
+    AnyType:$size,
+    AnyType:$stride,
+    AnyType:$dtype,
+    AnyType:$device,
+    AnyType:$layout
+  );
+}
+
+def AtenArangeStartStepOp : Torch_Op<"aten.arange.start_step", [Pure]> {
+  let summary = "Integer range";
+  let arguments = (ins
+    IntType:$start,
+    IntType:$end,
+    IntType:$step,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    TorchBoolType:$pin_memory
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSliceTensorOp : Torch_Op<"aten.slice.Tensor", [Pure]> {
+  let summary = "Slice one dimension";
+  let arguments = (ins
+    ValueTensorType:$self,
+    IntType:$dim,
+    IntType:$start,
+    IntType:$end,
+    IntType:$step
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenUpsampleNearest2dVecOp : Torch_Op<"aten.upsample_nearest2d.vec", [Pure]> {
+  let summary = "Nearest-neighbor resize to a size list";
+  let arguments = (ins ValueTensorType:$self, ListType:$output_size, AnyType:$scale_factors);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenDivTensorOp : Torch_Op<"aten.div.Tensor", [Pure]> {
+  let summary = "Elementwise division";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenBitwiseAndTensorOp : Torch_Op<"aten.bitwise_and.Tensor", [Pure]> {
+  let summary = "Elementwise logical and";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEmptyStridedOp : Torch_Op<"aten.empty_strided", [Pure]> {
+  let summary = "Uninitialized tensor used as a shape template";
+  let arguments = (ins
+    ListType:$size,
+    ListType:$stride,
+    IntType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    TorchBoolType:$pin_memory
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def PrimsConvertElementTypeOp : Torch_Op<"prims.convert_element_type", [Pure]> {
+  let summary = "Cast to a Torch scalar type code";
+  let arguments = (ins ValueTensorType:$a, IntType:$dtype);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenCatOp : Torch_Op<"aten.cat", [Pure]> {
+  let summary = "Concatenate a tensor list";
+  let arguments = (ins ListType:$tensors, IntType:$dim);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenCumsumOp : Torch_Op<"aten.cumsum", [Pure]> {
+  let summary = "Cumulative sum";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, AnyType:$dtype);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSinOp : Torch_Op<"aten.sin", [Pure]> {
+  let summary = "Elementwise sine";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenCosOp : Torch_Op<"aten.cos", [Pure]> {
+  let summary = "Elementwise cosine";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIntBoolOp : Torch_Op<"aten.Int.bool", [Pure]> {
+  let summary = "Bool scalar to integer scalar";
+  let arguments = (ins TorchBoolType:$a);
+  let results = (outs IntType:$result);
+}
+
+def AtenGeScalarOp : Torch_Op<"aten.ge.Scalar", [Pure]> {
+  let summary = "Elementwise greater-or-equal against a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIndexTensorOp : Torch_Op<"aten.index.Tensor", [Pure]> {
+  let summary = "Index with a list of index tensors";
+  let arguments = (ins ValueTensorType:$self, ListType:$indices);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenMaxPool2dWithIndicesOp : Torch_Op<"aten.max_pool2d_with_indices", [Pure]> {
+  let summary = "2-D max pool; the index result is dropped when unused";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$kernel_size,
+    ListType:$stride,
+    ListType:$padding,
+    ListType:$dilation,
+    TorchBoolType:$ceil_mode
+  );
+  let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenSelectIntOp : Torch_Op<"aten.select.int", [Pure]> {
+  let summary = "Select one index along a dimension";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, IntType:$index);
+  let results = (outs ValueTensorType:$result);
+}
+
+def PrimNumToTensorScalarOp : Torch_Op<"prim.NumToTensor.Scalar", [Pure]> {
+  let summary = "Scalar integer to a rank-0 tensor";
+  let arguments = (ins IntType:$a);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenDivTensorModeOp : Torch_Op<"aten.div.Tensor_mode", [Pure]> {
+  let summary = "Elementwise division with a rounding mode";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other, TorchStringType:$rounding_mode);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenPowScalarOp : Torch_Op<"aten.pow.Scalar", [Pure]> {
+  let summary = "Scalar base raised to a tensor exponent";
+  let arguments = (ins AnyType:$self, ValueTensorType:$exponent);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenRepeatOp : Torch_Op<"aten.repeat", [Pure]> {
+  let summary = "Tile by a repeat list";
+  let arguments = (ins ValueTensorType:$self, ListType:$repeats);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSigmoidOp : Torch_Op<"aten.sigmoid", [Pure]> {
+  let summary = "Elementwise sigmoid";
+  let arguments = (ins ValueTensorType:$self);
   let results = (outs ValueTensorType:$result);
 }
 
