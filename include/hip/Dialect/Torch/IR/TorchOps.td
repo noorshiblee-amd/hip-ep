@@ -476,4 +476,69 @@ def AtenGeluOp : Torch_Op<"aten.gelu", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenEmbeddingOp : Torch_Op<"aten.embedding", [Pure]> {
+  let summary = "Gather embedding rows by index";
+  let arguments = (ins
+    ValueTensorType:$weight,
+    ValueTensorType:$indices,
+    IntType:$padding_idx,
+    TorchBoolType:$scale_grad_by_freq,
+    TorchBoolType:$sparse
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAliasOp : Torch_Op<"aten.alias", [Pure]> {
+  let summary = "Identity view of a tensor";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEqTensorOp : Torch_Op<"aten.eq.Tensor", [Pure]> {
+  let summary = "Elementwise equality of two tensors";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLeTensorOp : Torch_Op<"aten.le.Tensor", [Pure]> {
+  let summary = "Elementwise less-or-equal of two tensors";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenMeanDimOp : Torch_Op<"aten.mean.dim", [Pure]> {
+  let summary = "Mean along a dimension list";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$dim,
+    TorchBoolType:$keepdim,
+    AnyType:$dtype
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenNeScalarOp : Torch_Op<"aten.ne.Scalar", [Pure]> {
+  let summary = "Elementwise not-equal against a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenNegOp : Torch_Op<"aten.neg", [Pure]> {
+  let summary = "Elementwise negation";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenPowTensorScalarOp : Torch_Op<"aten.pow.Tensor_Scalar", [Pure]> {
+  let summary = "Raise a tensor to a scalar power";
+  let arguments = (ins ValueTensorType:$self, AnyType:$exponent);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSubScalarOp : Torch_Op<"aten.sub.Scalar", [Pure]> {
+  let summary = "Subtract a scalar with alpha";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other, AnyType:$alpha);
+  let results = (outs ValueTensorType:$result);
+}
+
 #endif // TORCH_OPS

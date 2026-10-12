@@ -114,53 +114,85 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   return success();
 }
 
-LogicalResult lowerIntegerAddScalar(Operation *op, OpBuilder &builder,
-                                    Value context) {
+LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
+                                      Value context, bool scalarOther,
+                                      hip::ElementwiseKind kind,
+                                      StringRef name) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType || !inputType.hasStaticShape() ||
       !inputType.getElementType().isInteger(64)) {
-    return op->emitError("integer aten.add.Scalar requires a static i64 tensor");
+    return op->emitError() << "integer " << name
+                           << " requires a static i64 tensor";
   }
-  FailureOr<int64_t> other = readI64Scalar(op->getOperand(1));
   FailureOr<int64_t> alpha = readI64Scalar(op->getOperand(2));
-  if (failed(other) || failed(alpha))
-    return op->emitError("integer aten.add.Scalar operands must be constant");
-  // self + alpha * other. Either factor being zero leaves self unchanged.
-  if (*other == 0 || *alpha == 0) {
-    op->getResult(0).replaceAllUsesWith(op->getOperand(0));
-    op->erase();
-    return success();
-  }
+  if (failed(alpha))
+    return op->emitError() << "integer " << name << " alpha must be constant";
   Location loc = op->getLoc();
-  Value delta = arith::ConstantOp::create(
-      builder, loc, builder.getI64IntegerAttr(*alpha * *other));
-  auto scalarType = RankedTensorType::get({}, inputType.getElementType());
-  Value deltaTensor =
-      tensor::SplatOp::create(builder, loc, scalarType, delta);
+  Value rhs = op->getOperand(1);
+  if (scalarOther) {
+    FailureOr<int64_t> other = readI64Scalar(rhs);
+    if (failed(other))
+      return op->emitError() << "integer " << name
+                             << " other must be a constant";
+    // self ± alpha * other. Either factor being zero leaves self unchanged.
+    if (*other == 0 || *alpha == 0) {
+      op->getResult(0).replaceAllUsesWith(op->getOperand(0));
+      op->erase();
+      return success();
+    }
+    Value delta = arith::ConstantOp::create(
+        builder, loc, builder.getI64IntegerAttr(*alpha * *other));
+    auto scalarType = RankedTensorType::get({}, inputType.getElementType());
+    rhs = tensor::SplatOp::create(builder, loc, scalarType, delta);
+  } else {
+    auto otherType = dyn_cast<RankedTensorType>(rhs.getType());
+    if (!otherType || otherType.getElementType() != inputType.getElementType())
+      return op->emitError() << "integer " << name
+                             << " other must be an i64 tensor";
+    if (*alpha != 1) {
+      Value alphaValue = arith::ConstantOp::create(
+          builder, loc, builder.getI64IntegerAttr(*alpha));
+      auto scalarType = RankedTensorType::get({}, inputType.getElementType());
+      Value alphaTensor =
+          tensor::SplatOp::create(builder, loc, scalarType, alphaValue);
+      FailureOr<Value> scaled = hip::emitElementwise(
+          builder, loc, context, rhs, alphaTensor, otherType,
+          hip::ElementwiseKind::Mul);
+      if (failed(scaled))
+        return op->emitError() << "integer " << name << " alpha multiply failed";
+      rhs = *scaled;
+    }
+  }
   FailureOr<Value> result = hip::emitElementwise(
-      builder, loc, context, op->getOperand(0), deltaTensor, inputType,
-      hip::ElementwiseKind::Add);
+      builder, loc, context, op->getOperand(0), rhs, inputType, kind);
   if (failed(result))
-    return op->emitError("integer aten.add.Scalar failed");
+    return op->emitError() << "integer " << name << " failed";
   op->getResult(0).replaceAllUsesWith(*result);
   op->erase();
   return success();
 }
 
+bool isIntegerTensorResult(Operation *op) {
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
+  return valueTensor && isa<IntegerType>(valueTensor.getDtype());
+}
+
 LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
-  if (auto valueTensor =
-          dyn_cast<torch::ValueTensorType>(op->getResult(0).getType())) {
-    if (isa<IntegerType>(valueTensor.getDtype()) &&
-        op->getName().getStringRef() == "torch.aten.add.Scalar")
-      return lowerIntegerAddScalar(op, builder, context);
-  }
   bool scalarOther = op->getName().getStringRef() == "torch.aten.add.Scalar";
+  if (isIntegerTensorResult(op) && scalarOther)
+    return lowerIntegerAlphaBinary(op, builder, context, /*scalarOther=*/true,
+                                   hip::ElementwiseKind::Add, "aten.add");
   return lowerAlphaBinary(op, builder, context, scalarOther,
                           hip::ElementwiseKind::Add, "aten.add");
 }
 
 LogicalResult lowerAtenSub(Operation *op, OpBuilder &builder, Value context) {
-  return lowerAlphaBinary(op, builder, context, /*scalarOther=*/false,
+  bool scalarOther = op->getName().getStringRef() == "torch.aten.sub.Scalar";
+  if (isIntegerTensorResult(op))
+    return lowerIntegerAlphaBinary(op, builder, context, scalarOther,
+                                   hip::ElementwiseKind::Sub, "aten.sub");
+  return lowerAlphaBinary(op, builder, context, scalarOther,
                           hip::ElementwiseKind::Sub, "aten.sub");
 }
 
@@ -704,6 +736,7 @@ void mlir::torch::populateTorchToHipRewrites(
   rewrites.push_back({"torch.aten.add.Tensor", lowerAtenAdd});
   rewrites.push_back({"torch.aten.add.Scalar", lowerAtenAdd});
   rewrites.push_back({"torch.aten.sub.Tensor", lowerAtenSub});
+  rewrites.push_back({"torch.aten.sub.Scalar", lowerAtenSub});
   rewrites.push_back({"torch.aten.mul.Tensor", lowerAtenMulTensor});
   rewrites.push_back({"torch.aten.mul.Scalar", lowerAtenMulScalar});
   rewrites.push_back({"torch.aten.div.Scalar", lowerAtenDivScalar});

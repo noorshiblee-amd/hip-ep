@@ -71,7 +71,8 @@ LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
       return func.emitError()
              << "argument " << index << " has unsupported Torch type "
              << arg.getType()
-             << "; tensor element type must be f16, f32, or bf16";
+             << "; tensor element type must be f16, f32, bf16, i1, or an "
+                "integer";
     }
     arg.setType(*converted);
     argTypes.push_back(*converted);

@@ -22,7 +22,8 @@ bool isTorchType(Type type);
 bool isAcceptedFloatElementType(Type elementType);
 
 /// Builtin type for a Torch scalar or value tensor. Non-Torch types pass
-/// through. Integer and bool tensors fail.
+/// through. Ranked integer and i1 tensors are accepted for function arguments
+/// (token ids / masks). Float-only helpers still use toBuiltinTensorType.
 FailureOr<Type> toBuiltinType(Type type);
 
 /// Ranked builtin tensor for a Torch value tensor with an accepted element

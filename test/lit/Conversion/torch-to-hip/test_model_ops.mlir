@@ -23,6 +23,31 @@ module {
     return %c : !torch.vtensor<[5,4],f32>
   }
 
+  func.func @embedding(%w: !torch.vtensor<[8,4],f32>, %ids: !torch.vtensor<[2],si64>) -> !torch.vtensor<[2,4],f32> {
+    // CHECK-LABEL: func.func @embedding
+    %pad = torch.constant.int -1
+    %false = torch.constant.bool false
+    %y = torch.aten.embedding %w, %ids, %pad, %false, %false : !torch.vtensor<[8,4],f32>, !torch.vtensor<[2],si64>, !torch.int, !torch.bool, !torch.bool -> !torch.vtensor<[2,4],f32>
+    // CHECK: hip.gather
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,4],f32>
+  }
+
+  func.func @mean_and_square(%x: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,1],f32> {
+    // CHECK-LABEL: func.func @mean_and_square
+    %two = torch.constant.int 2
+    %sq = torch.aten.pow.Tensor_Scalar %x, %two : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dim = torch.constant.int -1
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %keep = torch.constant.bool true
+    %none = torch.constant.none
+    %m = torch.aten.mean.dim %sq, %dims, %keep, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,1],f32>
+    // CHECK: hip.mul
+    // CHECK: hip.reduce_mean
+    // CHECK-NOT: torch.
+    return %m : !torch.vtensor<[2,1],f32>
+  }
+
   func.func @gelu_exact(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @gelu_exact
     %none = torch.constant.str "none"

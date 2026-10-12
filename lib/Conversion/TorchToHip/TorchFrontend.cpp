@@ -12,6 +12,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 
 #include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include <limits>
 
@@ -40,11 +41,20 @@ FailureOr<RankedTensorType> mlir::torch::toBuiltinTensorType(Type type) {
 }
 
 FailureOr<Type> mlir::torch::toBuiltinType(Type type) {
-  if (isa<ValueTensorType>(type)) {
+  if (auto valueTensor = dyn_cast<ValueTensorType>(type)) {
     FailureOr<RankedTensorType> tensorType = toBuiltinTensorType(type);
-    if (failed(tensorType))
+    if (succeeded(tensorType))
+      return Type(*tensorType);
+    // Token ids and masks are integer or i1 arguments. Float arithmetic still
+    // goes through toBuiltinTensorType and rejects them there.
+    Type dtype = valueTensor.getDtype();
+    auto integer = dyn_cast<IntegerType>(dtype);
+    if (!integer ||
+        llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic))
       return failure();
-    return Type(*tensorType);
+    Type element =
+        IntegerType::get(type.getContext(), integer.getWidth());
+    return Type(RankedTensorType::get(valueTensor.getSizes(), element));
   }
   if (isa<IntType>(type))
     return IntegerType::get(type.getContext(), 64);
