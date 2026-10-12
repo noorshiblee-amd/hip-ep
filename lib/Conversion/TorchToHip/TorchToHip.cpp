@@ -155,20 +155,33 @@ LogicalResult lowerFunction(func::FuncOp func,
       progress = true;
   }
 
-  SmallVector<Operation *> droppedCarriers;
+  SmallVector<Operation *> droppedLists;
+  SmallVector<Operation *> droppedConstants;
   func.walk([&](Operation *op) {
     StringRef name = op->getName().getStringRef();
-    if (name == "torch.constant.none" || name == "torch.constant.device" ||
-        name == "torch.constant.str" || name == "torch.prim.ListConstruct")
-      droppedCarriers.push_back(op);
+    if (name == "torch.prim.ListConstruct")
+      droppedLists.push_back(op);
+    else if (name == "torch.constant.none" || name == "torch.constant.device" ||
+             name == "torch.constant.str")
+      droppedConstants.push_back(op);
   });
-  for (Operation *op : droppedCarriers) {
+  // A use-empty list can still reference `torch.constant.none` (a full
+  // slice inside aten.index.Tensor). Erase lists first so those constants
+  // become dead.
+  auto eraseIfDead = [](Operation *op) {
     if (!op->use_empty()) {
       op->emitError("still has uses after Torch-to-HIP conversion");
       return failure();
     }
     op->erase();
-  }
+    return success();
+  };
+  for (Operation *op : droppedLists)
+    if (failed(eraseIfDead(op)))
+      return failure();
+  for (Operation *op : droppedConstants)
+    if (failed(eraseIfDead(op)))
+      return failure();
 
   LogicalResult leftover = success();
   func.walk([&](Operation *op) {

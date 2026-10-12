@@ -76,4 +76,68 @@ module {
     // CHECK-NOT: torch.
     return %q : !torch.vtensor<[4],f32>
   }
+
+  func.func @sub_float_index(%x: !torch.vtensor<[4],f32>, %ids: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @sub_float_index
+    %one = torch.constant.int 1
+    %y = torch.aten.sub.Tensor %x, %ids, %one : !torch.vtensor<[4],f32>, !torch.vtensor<[4],si64>, !torch.int -> !torch.vtensor<[4],f32>
+    // CHECK: hip.cast
+    // CHECK: hip.sub
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @clamp_min(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @clamp_min
+    %zero = torch.constant.float 0.000000e+00
+    %none = torch.constant.none
+    %y = torch.aten.clamp %x, %zero, %none : !torch.vtensor<[4],f32>, !torch.float, !torch.none -> !torch.vtensor<[4],f32>
+    // CHECK: hip.max
+    // CHECK-NOT: hip.min
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @clamp_index(%x: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],si64> {
+    // CHECK-LABEL: func.func @clamp_index
+    %none = torch.constant.none
+    %hi = torch.constant.int 26
+    %y = torch.aten.clamp %x, %none, %hi : !torch.vtensor<[4],si64>, !torch.none, !torch.int -> !torch.vtensor<[4],si64>
+    // CHECK: hip.min
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],si64>
+  }
+
+  func.func @pad_window(%x: !torch.vtensor<[1,2,2,4],f32>) -> !torch.vtensor<[1,4,4,4],f32> {
+    // CHECK-LABEL: func.func @pad_window
+    %c0 = torch.constant.int 0
+    %c2 = torch.constant.int 2
+    %pads = torch.prim.ListConstruct %c0, %c0, %c0, %c2, %c0, %c2 : (!torch.int, !torch.int, !torch.int, !torch.int, !torch.int, !torch.int) -> !torch.list<int>
+    %zero = torch.constant.float 0.000000e+00
+    %y = torch.aten.constant_pad_nd %x, %pads, %zero : !torch.vtensor<[1,2,2,4],f32>, !torch.list<int>, !torch.float -> !torch.vtensor<[1,4,4,4],f32>
+    // CHECK: hip.pad
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,4,4],f32>
+  }
+
+  func.func @index_full_slice(%x: !torch.vtensor<[1,4,8],f32>, %ids: !torch.vtensor<[8],si64>) -> !torch.vtensor<[1,4,8],f32> {
+    // CHECK-LABEL: func.func @index_full_slice
+    %none0 = torch.constant.none
+    %none1 = torch.constant.none
+    %list = torch.prim.ListConstruct %none0, %none1, %ids : (!torch.none, !torch.none, !torch.vtensor<[8],si64>) -> !torch.list<optional<vtensor>>
+    %y = torch.aten.index.Tensor %x, %list : !torch.vtensor<[1,4,8],f32>, !torch.list<optional<vtensor>> -> !torch.vtensor<[1,4,8],f32>
+    // CHECK: hip.gather{{.*}}axis = 2
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,8],f32>
+  }
+
+  func.func @squeeze_batch(%x: !torch.vtensor<[1,4,8],f32>) -> !torch.vtensor<[4,8],f32> {
+    // CHECK-LABEL: func.func @squeeze_batch
+    %dim = torch.constant.int 0
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %y = torch.prims.squeeze %x, %dims : !torch.vtensor<[1,4,8],f32>, !torch.list<int> -> !torch.vtensor<[4,8],f32>
+    // CHECK: tensor.reshape
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4,8],f32>
+  }
 }

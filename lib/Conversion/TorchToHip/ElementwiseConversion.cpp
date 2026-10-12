@@ -61,10 +61,17 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   }
 
   auto otherType = dyn_cast<RankedTensorType>(other.getType());
-  if (!otherType ||
-      !torch::isAcceptedFloatElementType(otherType.getElementType())) {
-    return op->emitError() << name
-                           << " other must be an f16, f32, or bf16 tensor";
+  if (!otherType)
+    return op->emitError() << name << " other must be a tensor";
+  // A float result with an integer tensor other is a cast, then the
+  // float kernel.
+  if (!torch::isAcceptedFloatElementType(otherType.getElementType())) {
+    FailureOr<Value> promoted =
+        hip::castToElementType(builder, loc, context, other, elementType);
+    if (failed(promoted))
+      return op->emitError() << name
+                             << " other must be an f16, f32, or bf16 tensor";
+    other = *promoted;
   }
 
   FailureOr<Value> castSelf =

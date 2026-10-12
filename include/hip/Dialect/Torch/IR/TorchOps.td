@@ -541,4 +541,22 @@ def AtenSubScalarOp : Torch_Op<"aten.sub.Scalar", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenClampOp : Torch_Op<"aten.clamp", [Pure]> {
+  let summary = "Clamp a tensor between optional scalar bounds";
+  let arguments = (ins ValueTensorType:$self, AnyType:$min, AnyType:$max);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenConstantPadNdOp : Torch_Op<"aten.constant_pad_nd", [Pure]> {
+  let summary = "Pad a tensor with a constant, pairs counted from the last axis";
+  let arguments = (ins ValueTensorType:$self, ListType:$pad, AnyType:$value);
+  let results = (outs ValueTensorType:$result);
+}
+
+def PrimsSqueezeOp : Torch_Op<"prims.squeeze", [Pure]> {
+  let summary = "Drop size-1 dimensions";
+  let arguments = (ins ValueTensorType:$self, ListType:$dimensions);
+  let results = (outs ValueTensorType:$result);
+}
+
 #endif // TORCH_OPS

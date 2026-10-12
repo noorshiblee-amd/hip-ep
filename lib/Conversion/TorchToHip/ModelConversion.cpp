@@ -918,7 +918,12 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   Operation *list = op->getOperand(1).getDefiningOp();
   if (!list || list->getName().getStringRef() != "torch.prim.ListConstruct")
     return op->emitError("aten.index.Tensor expects a prim.ListConstruct");
-  if (elementsStillTorch(list))
+  // `none` is a full slice. Any other Torch value is an index that is not
+  // ready yet.
+  if (llvm::any_of(list->getOperands(), [](Value value) {
+        return !isa<torch::TorchNoneType>(value.getType()) &&
+               torch::isTorchType(value.getType());
+      }))
     return success();
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -926,6 +931,60 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   auto dataType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!dataType || !dataType.hasStaticShape() || list->getNumOperands() == 0)
     return op->emitError("aten.index.Tensor requires static index tensors");
+
+  SmallVector<Value> tensorIndices;
+  SmallVector<int64_t> tensorAxes;
+  for (auto [axis, index] : llvm::enumerate(list->getOperands())) {
+    if (isa<torch::TorchNoneType>(index.getType()))
+      continue;
+    tensorAxes.push_back(static_cast<int64_t>(axis));
+    tensorIndices.push_back(index);
+  }
+  if (tensorIndices.empty())
+    return op->emitError("aten.index.Tensor has no index tensor");
+  // One tensor index, with `none` meaning a full slice of that axis, is
+  // ONNX Gather: the index shape replaces `axis`.
+  // Before: index [none, none, ids<27>] on tensor<1x64x27>
+  // After:  hip.gather axis = 2
+  if (tensorIndices.size() == 1) {
+    int64_t axis = tensorAxes.front();
+    if (axis >= dataType.getRank())
+      return op->emitError("aten.index.Tensor axis is out of range");
+    Location loc = op->getLoc();
+    Value index = tensorIndices.front();
+    auto indexType = dyn_cast<RankedTensorType>(index.getType());
+    if (!indexType || !indexType.hasStaticShape())
+      return op->emitError("aten.index.Tensor index must be static");
+    if (indexType.getElementType() != builder.getI64Type()) {
+      auto castType =
+          RankedTensorType::get(indexType.getShape(), builder.getI64Type());
+      FailureOr<Value> casted = hipCast(builder, loc, context, index, castType);
+      if (failed(casted))
+        return op->emitError("aten.index.Tensor cannot cast an index");
+      index = *casted;
+      indexType = castType;
+    }
+    SmallVector<int64_t> expected(dataType.getShape().begin(),
+                                  dataType.getShape().begin() + axis);
+    expected.append(indexType.getShape().begin(), indexType.getShape().end());
+    expected.append(dataType.getShape().begin() + axis + 1,
+                    dataType.getShape().end());
+    if (expected != resultType->getShape())
+      return op->emitError("aten.index.Tensor result shape does not match");
+    FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
+    if (failed(init))
+      return failure();
+    Value gathered =
+        hip::GatherOp::create(builder, loc, context, op->getOperand(0), index,
+                              *init, builder.getI64IntegerAttr(axis))
+            ->getResult(0);
+    op->getResult(0).replaceAllUsesWith(gathered);
+    op->erase();
+    return success();
+  }
+  if (tensorIndices.size() != list->getNumOperands())
+    return op->emitError(
+        "aten.index.Tensor mixed None and multiple indices are not supported");
 
   int64_t rank = 0;
   SmallVector<RankedTensorType> indexTypes;
@@ -1192,6 +1251,131 @@ LogicalResult lowerRepeat(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// aten.clamp(x, min, max). A `none` bound is omitted.
+// Before: clamp(x, 0.0, none) on f32
+// After:  hip.max(x, splat(0.0))
+// Before: clamp(x, none, 26) on i64
+// After:  hip.min(x, splat(26))
+LogicalResult lowerClamp(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType ||
+      inputType.getElementType() != resultType->getElementType()) {
+    return op->emitError(
+        "aten.clamp input element type must match the result");
+  }
+  Location loc = op->getLoc();
+  Value current = op->getOperand(0);
+  auto applyBound = [&](Value bound, bool lower) -> LogicalResult {
+    if (isa<torch::TorchNoneType>(bound.getType()))
+      return success();
+    FailureOr<Value> splat =
+        scalarTensor(builder, loc, bound, resultType->getElementType());
+    if (failed(splat))
+      return op->emitError("aten.clamp bound must be a scalar");
+    FailureOr<Value> next = hip::emitElementwise(
+        builder, loc, context, current, *splat, *resultType,
+        lower ? hip::ElementwiseKind::Max : hip::ElementwiseKind::Min);
+    if (failed(next))
+      return op->emitError("aten.clamp failed");
+    current = *next;
+    return success();
+  };
+  if (failed(applyBound(op->getOperand(1), true)) ||
+      failed(applyBound(op->getOperand(2), false)))
+    return failure();
+  op->getResult(0).replaceAllUsesWith(current);
+  op->erase();
+  return success();
+}
+
+// aten.constant_pad_nd counts (begin, end) pairs from the last axis.
+// hip.pad stores every axis as begins followed by ends.
+// Before: pad [1,64,64,768] with [0, 0, 0, 6, 0, 6]
+// After:  hip.pad pads dense<[0, 0, 0, 0, 0, 6, 6, 0]>
+LogicalResult lowerConstantPad(Operation *op, OpBuilder &builder,
+                               Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<SmallVector<int64_t>> padding = readI64List(op->getOperand(1));
+  if (!inputType || !inputType.hasStaticShape() || failed(padding) ||
+      padding->size() % 2 != 0 ||
+      static_cast<int64_t>(padding->size()) > inputType.getRank() * 2) {
+    return op->emitError(
+        "aten.constant_pad_nd padding must be a constant even-length list");
+  }
+  int64_t rank = inputType.getRank();
+  SmallVector<int64_t> onnxPads(2 * rank, 0);
+  int64_t pairs = static_cast<int64_t>(padding->size()) / 2;
+  for (int64_t pair : llvm::seq<int64_t>(0, pairs)) {
+    int64_t axis = rank - 1 - pair;
+    int64_t begin = (*padding)[2 * pair];
+    int64_t end = (*padding)[2 * pair + 1];
+    if (begin < 0 || end < 0)
+      return op->emitError(
+          "aten.constant_pad_nd negative padding is not supported");
+    onnxPads[axis] = begin;
+    onnxPads[rank + axis] = end;
+  }
+  for (int64_t axis : llvm::seq<int64_t>(0, rank)) {
+    if (inputType.getDimSize(axis) + onnxPads[axis] + onnxPads[rank + axis] !=
+        resultType->getDimSize(axis)) {
+      return op->emitError(
+          "aten.constant_pad_nd result shape does not match the padding");
+    }
+  }
+  Location loc = op->getLoc();
+  FailureOr<Value> fill = scalarTensor(builder, loc, op->getOperand(2),
+                                       resultType->getElementType());
+  FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
+  if (failed(fill) || failed(init))
+    return op->emitError("aten.constant_pad_nd requires a scalar fill value");
+  auto padded = hip::PadOp::create(builder, loc, context, op->getOperand(0),
+                                  i64Vector(builder, loc, onnxPads), *fill,
+                                  /*axes=*/Value(), *init, "constant");
+  op->getResult(0).replaceAllUsesWith(padded->getResult(0));
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerSqueeze(Operation *op, OpBuilder &builder,
+                           Value /*context*/) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<SmallVector<int64_t>> dims = readI64List(op->getOperand(1));
+  if (!inputType || !inputType.hasStaticShape() || failed(dims) ||
+      inputType.getElementType() != resultType->getElementType()) {
+    return op->emitError(
+        "prims.squeeze requires a static input and constant dims");
+  }
+  for (int64_t dim : *dims) {
+    if (failed(normalizeAxis(dim, inputType.getRank())) ||
+        inputType.getDimSize(dim) != 1) {
+      return op->emitError("prims.squeeze dim must be a size-1 axis");
+    }
+  }
+  int64_t inputCount = 1;
+  int64_t resultCount = 1;
+  for (int64_t dim : inputType.getShape())
+    inputCount *= dim;
+  for (int64_t dim : resultType->getShape())
+    resultCount *= dim;
+  if (inputCount != resultCount)
+    return op->emitError("prims.squeeze result shape does not match the input");
+  Value shape = i64Vector(builder, op->getLoc(), resultType->getShape());
+  auto reshaped = tensor::ReshapeOp::create(builder, op->getLoc(), *resultType,
+                                            op->getOperand(0), shape);
+  op->getResult(0).replaceAllUsesWith(reshaped.getResult());
+  op->erase();
+  return success();
+}
+
 } // namespace
 
 void mlir::torch::populateTorchModelRewrites(
@@ -1236,4 +1420,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.ne.Scalar", lowerNeScalar});
   rewrites.push_back({"torch.aten.neg", lowerNeg});
   rewrites.push_back({"torch.aten.pow.Tensor_Scalar", lowerPowTensorScalar});
+  rewrites.push_back({"torch.aten.clamp", lowerClamp});
+  rewrites.push_back({"torch.aten.constant_pad_nd", lowerConstantPad});
+  rewrites.push_back({"torch.prims.squeeze", lowerSqueeze});
 }

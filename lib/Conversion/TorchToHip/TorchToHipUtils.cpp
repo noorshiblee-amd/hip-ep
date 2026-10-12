@@ -264,6 +264,9 @@ FailureOr<Value> mlir::hip::emitElementwise(OpBuilder &builder, Location loc,
     created =
         hip::MaxOp::create(builder, loc, resultType, context, lhs, rhs, *init);
     break;
+  case ElementwiseKind::Min:
+    created = hip::MinOp::create(builder, loc, context, lhs, rhs, *init);
+    break;
   }
   return created->getResult(0);
 }
