@@ -4,9 +4,9 @@
 // RUN: not hip-mlir-opt %s 2>&1 | FileCheck %s
 
 module {
-  // CHECK: aten.gelu
+  // CHECK: aten.silu
   func.func @pretty_unknown(%lhs: !torch.vtensor<[4],f32>, %rhs: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
-    %output = torch.aten.gelu %lhs : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    %output = torch.aten.silu %lhs : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
     return %output : !torch.vtensor<[4],f32>
   }
 }

@@ -26,8 +26,8 @@ module {
   // An operation this dialect does not spell still round-trips in generic form.
   func.func @generic_unknown(%arg0: !torch.vtensor<[4],f32>, %arg1: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @generic_unknown
-    // CHECK: "torch.aten.gelu"
-    %0 = "torch.aten.gelu"(%arg0) : (!torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32>
+    // CHECK: "torch.aten.silu"
+    %0 = "torch.aten.silu"(%arg0) : (!torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32>
     return %0 : !torch.vtensor<[4],f32>
   }
 }

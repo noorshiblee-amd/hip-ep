@@ -23,6 +23,25 @@ module {
     return %c : !torch.vtensor<[5,4],f32>
   }
 
+  func.func @gelu_exact(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @gelu_exact
+    %none = torch.constant.str "none"
+    %y = torch.aten.gelu %x, %none : !torch.vtensor<[4],f32>, !torch.str -> !torch.vtensor<[4],f32>
+    // CHECK: hip.gelu
+    // CHECK-NOT: approximate
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @gelu_tanh(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @gelu_tanh
+    %tanh = torch.constant.str "tanh"
+    %y = torch.aten.gelu %x, %tanh : !torch.vtensor<[4],f32>, !torch.str -> !torch.vtensor<[4],f32>
+    // CHECK: hip.gelu{{.*}}approximate = "tanh"
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
   func.func @floor_div(%a: !torch.vtensor<[4],f32>, %b: !torch.vtensor<[],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @floor_div
     %str = torch.constant.str "floor"

@@ -681,6 +681,27 @@ LogicalResult lowerSigmoid(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTensor<hip::SigmoidOp>(op, builder, context, "aten.sigmoid");
 }
 
+LogicalResult lowerGelu(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto approximate = op->getOperand(1).getDefiningOp<torch::ConstantStrOp>();
+  if (!approximate || (approximate.getValue() != "none" &&
+                       approximate.getValue() != "tanh")) {
+    return op->emitError("aten.gelu approximate must be \"none\" or \"tanh\"");
+  }
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return op->emitError("aten.gelu requires a static result shape");
+  Value result =
+      hip::GeluOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                          *init, approximate.getValueAttr())
+          ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(result);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerIntBool(Operation *op, OpBuilder &builder,
                            Value /*context*/) {
   Value extended = arith::ExtUIOp::create(builder, op->getLoc(),
@@ -1030,4 +1051,5 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.pow.Scalar", lowerPow});
   rewrites.push_back({"torch.aten.repeat", lowerRepeat});
   rewrites.push_back({"torch.aten.sigmoid", lowerSigmoid});
+  rewrites.push_back({"torch.aten.gelu", lowerGelu});
 }
