@@ -693,6 +693,152 @@ LogicalResult lowerTanh(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTensor<hip::TanhOp>(op, builder, context, "aten.tanh");
 }
 
+template <typename HipOp>
+LogicalResult lowerUnaryTyped(Operation *op, OpBuilder &builder, Value context,
+                              StringRef name) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return op->emitError() << name << " requires a static result shape";
+  Value result = HipOp::create(builder, op->getLoc(), *resultType, context,
+                               op->getOperand(0), *init)
+                     ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(result);
+  op->erase();
+  return success();
+}
+
+template <typename HipOp>
+LogicalResult lowerUnaryInferred(Operation *op, OpBuilder &builder,
+                                 Value context, StringRef name) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return op->emitError() << name << " requires a static result shape";
+  Value result = HipOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                               *init)
+                     ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(result);
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerAbs(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTyped<hip::AbsOp>(op, builder, context, "aten.abs");
+}
+
+LogicalResult lowerCeil(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTyped<hip::CeilOp>(op, builder, context, "aten.ceil");
+}
+
+LogicalResult lowerLog(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTyped<hip::LogOp>(op, builder, context, "aten.log");
+}
+
+LogicalResult lowerSign(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryInferred<hip::SignOp>(op, builder, context, "aten.sign");
+}
+
+LogicalResult lowerSqrt(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryInferred<hip::SqrtOp>(op, builder, context, "aten.sqrt");
+}
+
+LogicalResult lowerBitwiseNot(Operation *op, OpBuilder &builder, Value context) {
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || !inputType.getElementType().isInteger(1))
+    return op->emitError("aten.bitwise_not only lowers an i1 tensor");
+  return lowerUnaryInferred<hip::NotOp>(op, builder, context,
+                                        "aten.bitwise_not");
+}
+
+// x > c is c < x. x < c is hip.less. x <= c is the complement of x > c.
+LogicalResult lowerScalarOrder(Operation *op, OpBuilder &builder, Value context,
+                               StringRef name, bool swap, bool invert) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType)
+    return op->emitError() << name << " requires a ranked input";
+  FailureOr<Value> other = scalarTensor(builder, op->getLoc(),
+                                        op->getOperand(1),
+                                        inputType.getElementType());
+  if (failed(other))
+    return op->emitError() << name << " cannot materialize its scalar";
+  Location loc = op->getLoc();
+  Value lhs = swap ? *other : op->getOperand(0);
+  Value rhs = swap ? op->getOperand(0) : *other;
+  FailureOr<Value> lessInit = emptyStatic(builder, loc, *resultType);
+  if (failed(lessInit))
+    return failure();
+  Value less = hip::LessOp::create(builder, loc, context, lhs, rhs, *lessInit)
+                   ->getResult(0);
+  Value result = less;
+  if (invert) {
+    FailureOr<Value> notInit = emptyStatic(builder, loc, *resultType);
+    if (failed(notInit))
+      return failure();
+    result = hip::NotOp::create(builder, loc, context, less, *notInit)
+                 ->getResult(0);
+  }
+  op->getResult(0).replaceAllUsesWith(result);
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerGtScalar(Operation *op, OpBuilder &builder, Value context) {
+  return lowerScalarOrder(op, builder, context, "aten.gt.Scalar",
+                          /*swap=*/true, /*invert=*/false);
+}
+
+LogicalResult lowerLtScalar(Operation *op, OpBuilder &builder, Value context) {
+  return lowerScalarOrder(op, builder, context, "aten.lt.Scalar",
+                          /*swap=*/false, /*invert=*/false);
+}
+
+LogicalResult lowerLeScalar(Operation *op, OpBuilder &builder, Value context) {
+  return lowerScalarOrder(op, builder, context, "aten.le.Scalar",
+                          /*swap=*/true, /*invert=*/true);
+}
+
+LogicalResult lowerGather(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  auto dataType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto indexType = dyn_cast<RankedTensorType>(op->getOperand(2).getType());
+  if (failed(resultType) || !dataType || !indexType ||
+      !indexType.getElementType().isIntOrIndex()) {
+    return op->emitError(
+        "aten.gather requires ranked data and integer indices");
+  }
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
+  FailureOr<bool> sparse = readI1Scalar(op->getOperand(3));
+  if (failed(dim) || failed(sparse) || *sparse) {
+    return op->emitError(
+        "aten.gather only lowers a constant dim with sparse_grad false");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, dataType.getRank())) ||
+      indexType.getRank() != dataType.getRank() ||
+      indexType.getShape() != resultType->getShape()) {
+    return op->emitError("aten.gather axis or index shape is invalid");
+  }
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return failure();
+  Value gathered =
+      hip::GatherElementsOp::create(builder, op->getLoc(), context,
+                                   op->getOperand(0), op->getOperand(2), *init,
+                                   builder.getI64IntegerAttr(axis))
+          ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(gathered);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerGelu(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -1504,4 +1650,14 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.constant_pad_nd", lowerConstantPad});
   rewrites.push_back({"torch.prims.squeeze", lowerSqueeze});
   rewrites.push_back({"torch.aten.linalg_vector_norm", lowerVectorNorm});
+  rewrites.push_back({"torch.aten.abs", lowerAbs});
+  rewrites.push_back({"torch.aten.sign", lowerSign});
+  rewrites.push_back({"torch.aten.ceil", lowerCeil});
+  rewrites.push_back({"torch.aten.log", lowerLog});
+  rewrites.push_back({"torch.aten.sqrt", lowerSqrt});
+  rewrites.push_back({"torch.aten.bitwise_not", lowerBitwiseNot});
+  rewrites.push_back({"torch.aten.gt.Scalar", lowerGtScalar});
+  rewrites.push_back({"torch.aten.lt.Scalar", lowerLtScalar});
+  rewrites.push_back({"torch.aten.le.Scalar", lowerLeScalar});
+  rewrites.push_back({"torch.aten.gather", lowerGather});
 }

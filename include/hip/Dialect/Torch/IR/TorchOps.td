@@ -282,7 +282,7 @@ def AtenFullLikeOp : Torch_Op<"aten.full_like", [Pure]> {
 
 def AtenCloneOp : Torch_Op<"aten.clone", [Pure]> {
   let summary = "Value-semantic copy";
-  let arguments = (ins ValueTensorType:$self, IntType:$memory_format);
+  let arguments = (ins ValueTensorType:$self, AnyType:$memory_format);
   let results = (outs ValueTensorType:$result);
 }
 
@@ -573,6 +573,71 @@ def AtenLinalgVectorNormOp : Torch_Op<"aten.linalg_vector_norm", [Pure]> {
     AnyType:$dim,
     TorchBoolType:$keepdim,
     AnyType:$dtype
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAbsOp : Torch_Op<"aten.abs", [Pure]> {
+  let summary = "Elementwise absolute value";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSignOp : Torch_Op<"aten.sign", [Pure]> {
+  let summary = "Elementwise sign";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenCeilOp : Torch_Op<"aten.ceil", [Pure]> {
+  let summary = "Elementwise ceiling";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLogOp : Torch_Op<"aten.log", [Pure]> {
+  let summary = "Elementwise natural logarithm";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSqrtOp : Torch_Op<"aten.sqrt", [Pure]> {
+  let summary = "Elementwise square root";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenBitwiseNotOp : Torch_Op<"aten.bitwise_not", [Pure]> {
+  let summary = "Elementwise bitwise complement";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenGtScalarOp : Torch_Op<"aten.gt.Scalar", [Pure]> {
+  let summary = "Elementwise greater-than against a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLtScalarOp : Torch_Op<"aten.lt.Scalar", [Pure]> {
+  let summary = "Elementwise less-than against a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLeScalarOp : Torch_Op<"aten.le.Scalar", [Pure]> {
+  let summary = "Elementwise less-or-equal against a scalar";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenGatherOp : Torch_Op<"aten.gather", [Pure]> {
+  let summary = "Gather elements along one axis";
+  let arguments = (ins
+    ValueTensorType:$self,
+    IntType:$dim,
+    ValueTensorType:$index,
+    TorchBoolType:$sparse_grad
   );
   let results = (outs ValueTensorType:$result);
 }

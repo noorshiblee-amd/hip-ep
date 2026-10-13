@@ -293,8 +293,31 @@ LogicalResult lowerScalarBinary(Operation *op, OpBuilder &builder,
 
 LogicalResult lowerAtenMulTensor(Operation *op, OpBuilder &builder,
                                  Value context) {
-  return lowerTensorBinary(op, builder, context, hip::ElementwiseKind::Mul,
-                           "aten.mul");
+  if (!isIntegerTensorResult(op)) {
+    return lowerTensorBinary(op, builder, context, hip::ElementwiseKind::Mul,
+                            "aten.mul");
+  }
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
+  auto lhsType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  if (!valueTensor || !lhsType || !rhsType || !lhsType.hasStaticShape() ||
+      !rhsType.hasStaticShape() ||
+      !lhsType.getElementType().isInteger(64) ||
+      rhsType.getElementType() != lhsType.getElementType() ||
+      llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
+    return op->emitError("integer aten.mul requires static i64 tensors");
+  }
+  auto resultType = RankedTensorType::get(valueTensor.getSizes(),
+                                          lhsType.getElementType());
+  FailureOr<Value> result = hip::emitElementwise(
+      builder, op->getLoc(), context, op->getOperand(0), op->getOperand(1),
+      resultType, hip::ElementwiseKind::Mul);
+  if (failed(result))
+    return op->emitError("integer aten.mul failed");
+  op->getResult(0).replaceAllUsesWith(*result);
+  op->erase();
+  return success();
 }
 
 LogicalResult lowerAtenDivTensor(Operation *op, OpBuilder &builder,

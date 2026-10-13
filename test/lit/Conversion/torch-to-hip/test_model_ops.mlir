@@ -163,4 +163,75 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[4,8],f32>
   }
+
+  func.func @abs_sign(%x: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],si64> {
+    // CHECK-LABEL: func.func @abs_sign
+    %signed = torch.aten.sign %x : !torch.vtensor<[4],si64> -> !torch.vtensor<[4],si64>
+    %y = torch.aten.abs %signed : !torch.vtensor<[4],si64> -> !torch.vtensor<[4],si64>
+    // CHECK: hip.sign
+    // CHECK: hip.abs
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],si64>
+  }
+
+  func.func @log_ceil_sqrt(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @log_ceil_sqrt
+    %logged = torch.aten.log %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    %ceiled = torch.aten.ceil %logged : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    %y = torch.aten.sqrt %ceiled : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.log
+    // CHECK: hip.ceil
+    // CHECK: hip.sqrt
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @bitwise_not(%x: !torch.vtensor<[4],i1>) -> !torch.vtensor<[4],i1> {
+    // CHECK-LABEL: func.func @bitwise_not
+    %y = torch.aten.bitwise_not %x : !torch.vtensor<[4],i1> -> !torch.vtensor<[4],i1>
+    // CHECK: hip.not
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],i1>
+  }
+
+  func.func @order_scalar(%x: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],i1> {
+    // CHECK-LABEL: func.func @order_scalar
+    %one = torch.constant.int 1
+    %gt = torch.aten.gt.Scalar %x, %one : !torch.vtensor<[4],si64>, !torch.int -> !torch.vtensor<[4],i1>
+    %lt = torch.aten.lt.Scalar %x, %one : !torch.vtensor<[4],si64>, !torch.int -> !torch.vtensor<[4],i1>
+    %le = torch.aten.le.Scalar %x, %one : !torch.vtensor<[4],si64>, !torch.int -> !torch.vtensor<[4],i1>
+    %both = torch.aten.bitwise_and.Tensor %gt, %lt : !torch.vtensor<[4],i1>, !torch.vtensor<[4],i1> -> !torch.vtensor<[4],i1>
+    %y = torch.aten.bitwise_and.Tensor %both, %le : !torch.vtensor<[4],i1>, !torch.vtensor<[4],i1> -> !torch.vtensor<[4],i1>
+    // CHECK: hip.less
+    // CHECK: hip.not
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],i1>
+  }
+
+  func.func @gather_last(%x: !torch.vtensor<[2,4],f32>, %index: !torch.vtensor<[2,2],si64>) -> !torch.vtensor<[2,2],f32> {
+    // CHECK-LABEL: func.func @gather_last
+    %dim = torch.constant.int -1
+    %sparse = torch.constant.bool false
+    %y = torch.aten.gather %x, %dim, %index, %sparse : !torch.vtensor<[2,4],f32>, !torch.int, !torch.vtensor<[2,2],si64>, !torch.bool -> !torch.vtensor<[2,2],f32>
+    // CHECK: hip.gather_elements
+    // CHECK-SAME: axis = 1
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,2],f32>
+  }
+
+  func.func @clone_none(%x: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],si64> {
+    // CHECK-LABEL: func.func @clone_none
+    %none = torch.constant.none
+    %y = torch.aten.clone %x, %none : !torch.vtensor<[4],si64>, !torch.none -> !torch.vtensor<[4],si64>
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],si64>
+  }
+
+  func.func @mul_i64(%a: !torch.vtensor<[1,4],si64>, %b: !torch.vtensor<[4,1],si64>) -> !torch.vtensor<[4,4],si64> {
+    // CHECK-LABEL: func.func @mul_i64
+    %y = torch.aten.mul.Tensor %a, %b : !torch.vtensor<[1,4],si64>, !torch.vtensor<[4,1],si64> -> !torch.vtensor<[4,4],si64>
+    // CHECK: hip.mul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4,4],si64>
+  }
 }
