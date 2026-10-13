@@ -1601,6 +1601,157 @@ LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
   return success();
 }
 
+LogicalResult lowerGtTensor(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return failure();
+  // A > B  <=>  B < A. hip.less broadcasts the two inputs.
+  Value less = hip::LessOp::create(builder, op->getLoc(), context,
+                                  op->getOperand(1), op->getOperand(0), *init)
+                   ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(less);
+  op->erase();
+  return success();
+}
+
+FailureOr<std::pair<Value, Value>>
+emitTopK(OpBuilder &builder, Location loc, Value context, Value input,
+         int64_t k, int64_t axis, bool largest, bool sorted,
+         RankedTensorType valuesType, RankedTensorType indicesType) {
+  FailureOr<Value> valuesInit = emptyStatic(builder, loc, valuesType);
+  FailureOr<Value> indicesInit = emptyStatic(builder, loc, indicesType);
+  if (failed(valuesInit) || failed(indicesInit))
+    return failure();
+  Value kScalar = arith::ConstantOp::create(builder, loc,
+                                            builder.getI64IntegerAttr(k));
+  auto kType = RankedTensorType::get({}, builder.getI64Type());
+  Value kTensor = tensor::SplatOp::create(builder, loc, kType, kScalar);
+  auto top = hip::TopKOp::create(
+      builder, loc, TypeRange{valuesType, indicesType}, context, input, kTensor,
+      *valuesInit, *indicesInit, builder.getI64IntegerAttr(axis),
+      builder.getBoolAttr(largest), builder.getBoolAttr(sorted));
+  return std::make_pair(top.getResult(0), top.getResult(1));
+}
+
+LogicalResult lowerTopk(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> valuesType = resultTensor(op, 0);
+  FailureOr<RankedTensorType> indicesType = resultTensor(op, 1);
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<int64_t> k = readI64Scalar(op->getOperand(1));
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(2));
+  FailureOr<bool> largest = readI1Scalar(op->getOperand(3));
+  FailureOr<bool> sorted = readI1Scalar(op->getOperand(4));
+  if (failed(valuesType) || failed(indicesType) || !inputType || failed(k) ||
+      failed(dim) || failed(largest) || failed(sorted) || *k <= 0) {
+    return op->emitError("aten.topk requires static tensors and constant k");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, inputType.getRank())))
+    return op->emitError("aten.topk axis is out of range");
+  FailureOr<std::pair<Value, Value>> top =
+      emitTopK(builder, op->getLoc(), context, op->getOperand(0), *k, axis,
+               *largest, *sorted, *valuesType, *indicesType);
+  if (failed(top))
+    return op->emitError("aten.topk failed");
+  op->getResult(0).replaceAllUsesWith(top->first);
+  op->getResult(1).replaceAllUsesWith(top->second);
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerMaxDim(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> valuesType = resultTensor(op, 0);
+  FailureOr<RankedTensorType> indicesType = resultTensor(op, 1);
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
+  FailureOr<bool> keepdim = readI1Scalar(op->getOperand(2));
+  if (failed(valuesType) || failed(indicesType) || !inputType || failed(dim) ||
+      failed(keepdim)) {
+    return op->emitError("aten.max.dim requires static tensors");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, inputType.getRank())))
+    return op->emitError("aten.max.dim axis is out of range");
+  SmallVector<int64_t> keptShape(inputType.getShape());
+  keptShape[axis] = 1;
+  auto keptValues =
+      RankedTensorType::get(keptShape, valuesType->getElementType());
+  auto keptIndices =
+      RankedTensorType::get(keptShape, indicesType->getElementType());
+  FailureOr<std::pair<Value, Value>> top =
+      emitTopK(builder, op->getLoc(), context, op->getOperand(0), /*k=*/1, axis,
+               /*largest=*/true, /*sorted=*/true, keptValues, keptIndices);
+  if (failed(top))
+    return op->emitError("aten.max.dim failed");
+  Value values = top->first;
+  Value indices = top->second;
+  if (!*keepdim) {
+    Value shape = i64Vector(builder, op->getLoc(), valuesType->getShape());
+    values = tensor::ReshapeOp::create(builder, op->getLoc(), *valuesType,
+                                       values, shape)
+                 .getResult();
+    Value indexShape =
+        i64Vector(builder, op->getLoc(), indicesType->getShape());
+    indices = tensor::ReshapeOp::create(builder, op->getLoc(), *indicesType,
+                                        indices, indexShape)
+                  .getResult();
+  }
+  op->getResult(0).replaceAllUsesWith(values);
+  op->getResult(1).replaceAllUsesWith(indices);
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
+                              Value /*context*/) {
+  Operation *split = op->getOperand(0).getDefiningOp();
+  if (!split ||
+      split->getName().getStringRef() != "torch.aten.split_with_sizes") {
+    return op->emitError(
+        "prim.ListUnpack only lowers a split_with_sizes list");
+  }
+  auto inputType = dyn_cast<RankedTensorType>(split->getOperand(0).getType());
+  FailureOr<SmallVector<int64_t>> sizes = readI64List(split->getOperand(1));
+  FailureOr<int64_t> dim = readI64Scalar(split->getOperand(2));
+  if (!inputType || !inputType.hasStaticShape() || failed(sizes) ||
+      failed(dim) || sizes->size() != op->getNumResults()) {
+    return op->emitError("aten.split_with_sizes requires constant sizes");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, inputType.getRank())))
+    return op->emitError("aten.split_with_sizes axis is out of range");
+  int64_t cursor = 0;
+  for (auto [index, section] : llvm::enumerate(*sizes)) {
+    if (section < 0)
+      return op->emitError("aten.split_with_sizes section must be non-negative");
+    FailureOr<RankedTensorType> resultType = resultTensor(op, index);
+    if (failed(resultType) || resultType->getDimSize(axis) != section)
+      return op->emitError("aten.split_with_sizes result size does not match");
+    SmallVector<OpFoldResult> offsets(inputType.getRank(),
+                                      builder.getIndexAttr(0));
+    SmallVector<OpFoldResult> sliceSizes;
+    SmallVector<OpFoldResult> strides(inputType.getRank(),
+                                      builder.getIndexAttr(1));
+    for (int64_t rank = 0; rank < inputType.getRank(); ++rank)
+      sliceSizes.push_back(builder.getIndexAttr(inputType.getDimSize(rank)));
+    offsets[axis] = builder.getIndexAttr(cursor);
+    sliceSizes[axis] = builder.getIndexAttr(section);
+    auto sliced = tensor::ExtractSliceOp::create(
+        builder, op->getLoc(), *resultType, split->getOperand(0), offsets,
+        sliceSizes, strides);
+    op->getResult(index).replaceAllUsesWith(sliced.getResult());
+    cursor += section;
+  }
+  if (cursor != inputType.getDimSize(axis))
+    return op->emitError("aten.split_with_sizes sections do not cover the axis");
+  op->erase();
+  split->erase();
+  return success();
+}
+
 } // namespace
 
 void mlir::torch::populateTorchModelRewrites(
@@ -1660,4 +1811,8 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.lt.Scalar", lowerLtScalar});
   rewrites.push_back({"torch.aten.le.Scalar", lowerLeScalar});
   rewrites.push_back({"torch.aten.gather", lowerGather});
+  rewrites.push_back({"torch.aten.gt.Tensor", lowerGtTensor});
+  rewrites.push_back({"torch.aten.max.dim", lowerMaxDim});
+  rewrites.push_back({"torch.aten.topk", lowerTopk});
+  rewrites.push_back({"torch.prim.ListUnpack", lowerListUnpack});
 }

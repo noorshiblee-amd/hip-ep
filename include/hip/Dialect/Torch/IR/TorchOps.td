@@ -642,4 +642,40 @@ def AtenGatherOp : Torch_Op<"aten.gather", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenGtTensorOp : Torch_Op<"aten.gt.Tensor", [Pure]> {
+  let summary = "Elementwise greater-than";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenMaxDimOp : Torch_Op<"aten.max.dim", [Pure]> {
+  let summary = "Maximum value and its index along one axis";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$keepdim);
+  let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenTopkOp : Torch_Op<"aten.topk", [Pure]> {
+  let summary = "Top-k values and indices along one axis";
+  let arguments = (ins
+    ValueTensorType:$self,
+    IntType:$k,
+    IntType:$dim,
+    TorchBoolType:$largest,
+    TorchBoolType:$sorted
+  );
+  let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenSplitWithSizesOp : Torch_Op<"aten.split_with_sizes", [Pure]> {
+  let summary = "Split a tensor into sized sections along one axis";
+  let arguments = (ins ValueTensorType:$self, ListType:$split_sizes, IntType:$dim);
+  let results = (outs ListType:$result);
+}
+
+def PrimListUnpackOp : Torch_Op<"prim.ListUnpack", [Pure]> {
+  let summary = "Unpack a tensor list into its elements";
+  let arguments = (ins AnyType:$list);
+  let results = (outs Variadic<AnyType>:$tensors);
+}
+
 #endif // TORCH_OPS

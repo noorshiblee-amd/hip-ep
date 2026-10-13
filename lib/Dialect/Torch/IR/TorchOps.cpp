@@ -26,13 +26,17 @@ ParseResult torch::parseDefaultTorchOp(OpAsmParser &parser,
   if (parser.parseOperandList(operands) ||
       parser.parseColonTypeList(operandTypes))
     return failure();
-  if (numResults > 0 &&
+  if (numResults != 0 &&
       (parser.parseArrow() || parser.parseTypeList(resultTypes)))
     return failure();
-  // A negative operand count accepts a variadic operand list.
+  // A negative count accepts a variadic list. Zero results omit the arrow.
+  bool resultCountOk =
+      numResults < 0
+          ? !resultTypes.empty()
+          : static_cast<int>(resultTypes.size()) == numResults;
   if (operands.size() != operandTypes.size() ||
       (numOperands >= 0 && static_cast<int>(operands.size()) != numOperands) ||
-      static_cast<int>(resultTypes.size()) != numResults) {
+      !resultCountOk) {
     return parser.emitError(parser.getNameLoc())
            << "expected " << numOperands << " operands and " << numResults
            << " results";
@@ -136,6 +140,11 @@ TORCH_DEFAULT_FORM(AtenGtScalarOp, 2, 1)
 TORCH_DEFAULT_FORM(AtenLtScalarOp, 2, 1)
 TORCH_DEFAULT_FORM(AtenLeScalarOp, 2, 1)
 TORCH_DEFAULT_FORM(AtenGatherOp, 4, 1)
+TORCH_DEFAULT_FORM(AtenGtTensorOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenMaxDimOp, 3, 2)
+TORCH_DEFAULT_FORM(AtenTopkOp, 5, 2)
+TORCH_DEFAULT_FORM(AtenSplitWithSizesOp, 3, 1)
+TORCH_DEFAULT_FORM(PrimListUnpackOp, 1, -1)
 
 #undef TORCH_DEFAULT_FORM
 

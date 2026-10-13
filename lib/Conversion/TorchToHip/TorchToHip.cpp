@@ -136,6 +136,19 @@ LogicalResult lowerFunction(func::FuncOp func,
         if (torch::isTorchType(type))
           ready = false;
       }
+      // split_with_sizes yields a tensor list. The unpack is ready only once
+      // that split's tensor, size list, and axis have left the Torch type
+      // system.
+      if (ready &&
+          op->getName().getStringRef() == "torch.prim.ListUnpack") {
+        Operation *split = op->getOperand(0).getDefiningOp();
+        if (split && split->getName().getStringRef() ==
+                         "torch.aten.split_with_sizes" &&
+            llvm::any_of(split->getOperands(), [](Value value) {
+              return torch::isTorchType(value.getType());
+            }))
+          ready = false;
+      }
       if (!ready)
         continue;
       OpBuilder builder(op);

@@ -234,4 +234,50 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[4,4],si64>
   }
+
+  func.func @gt_tensor(%a: !torch.vtensor<[1,4],si64>, %b: !torch.vtensor<[4,1],si64>) -> !torch.vtensor<[4,4],i1> {
+    // CHECK-LABEL: func.func @gt_tensor
+    %y = torch.aten.gt.Tensor %a, %b : !torch.vtensor<[1,4],si64>, !torch.vtensor<[4,1],si64> -> !torch.vtensor<[4,4],i1>
+    // CHECK: hip.less
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4,4],i1>
+  }
+
+  func.func @topk(%x: !torch.vtensor<[2,4],bf16>) -> !torch.vtensor<[2,1],si64> {
+    // CHECK-LABEL: func.func @topk
+    %k = torch.constant.int 1
+    %dim = torch.constant.int -1
+    %flag = torch.constant.bool true
+    %values, %indices = torch.aten.topk %x, %k, %dim, %flag, %flag : !torch.vtensor<[2,4],bf16>, !torch.int, !torch.int, !torch.bool, !torch.bool -> !torch.vtensor<[2,1],bf16>, !torch.vtensor<[2,1],si64>
+    // CHECK: hip.top_k
+    // CHECK-NOT: torch.
+    return %indices : !torch.vtensor<[2,1],si64>
+  }
+
+  func.func @max_dim(%x: !torch.vtensor<[2,4],bf16>) -> !torch.vtensor<[2],si64> {
+    // CHECK-LABEL: func.func @max_dim
+    %dim = torch.constant.int -1
+    %keep = torch.constant.bool false
+    %values, %indices = torch.aten.max.dim %x, %dim, %keep : !torch.vtensor<[2,4],bf16>, !torch.int, !torch.bool -> !torch.vtensor<[2],bf16>, !torch.vtensor<[2],si64>
+    // CHECK: hip.top_k
+    // CHECK: tensor.reshape
+    // CHECK-NOT: torch.
+    return %indices : !torch.vtensor<[2],si64>
+  }
+
+  func.func @split_sizes(%x: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,2],f32> {
+    // CHECK-LABEL: func.func @split_sizes
+    %two = torch.constant.int 2
+    %sizes = torch.prim.ListConstruct %two, %two : (!torch.int, !torch.int) -> !torch.list<int>
+    %dim = torch.constant.int -1
+    %list = torch.aten.split_with_sizes %x, %sizes, %dim : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.int -> !torch.list<vtensor>
+    %lo, %hi = torch.prim.ListUnpack %list : !torch.list<vtensor> -> !torch.vtensor<[2,2],f32>, !torch.vtensor<[2,2],f32>
+    %alpha = torch.constant.int 1
+    %y = torch.aten.add.Tensor %lo, %hi, %alpha : !torch.vtensor<[2,2],f32>, !torch.vtensor<[2,2],f32>, !torch.int -> !torch.vtensor<[2,2],f32>
+    // CHECK: tensor.extract_slice
+    // CHECK: tensor.extract_slice
+    // CHECK: hip.add
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,2],f32>
+  }
 }
