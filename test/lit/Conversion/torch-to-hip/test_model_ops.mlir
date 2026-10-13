@@ -312,4 +312,15 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[1,2,5,4],f32>
   }
+
+  func.func @flip(%x: !torch.vtensor<[3,2],f32>) -> !torch.vtensor<[3,2],f32> {
+    // CHECK-LABEL: func.func @flip
+    %dim = torch.constant.int 0
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %y = torch.aten.flip %x, %dims : !torch.vtensor<[3,2],f32>, !torch.list<int> -> !torch.vtensor<[3,2],f32>
+    // CHECK: arith.constant dense<[2, 1, 0]> : tensor<3xi64>
+    // CHECK: hip.gather
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[3,2],f32>
+  }
 }

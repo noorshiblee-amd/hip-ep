@@ -165,6 +165,12 @@ def AtenPermuteOp : Torch_Op<"aten.permute", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenFlipOp : Torch_Op<"aten.flip", [Pure]> {
+  let summary = "Reverse a tensor along the given dimensions";
+  let arguments = (ins ValueTensorType:$self, ListType:$dims);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenBroadcastToOp : Torch_Op<"aten.broadcast_to", [Pure]> {
   let summary = "Broadcast to a constant shape list";
   let arguments = (ins ValueTensorType:$self, ListType:$size);

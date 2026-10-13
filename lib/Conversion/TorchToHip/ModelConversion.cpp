@@ -1430,6 +1430,45 @@ LogicalResult lowerRepeat(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// aten.flip reverses each listed axis independently.
+// Before: flip(x, [0]) on tensor<3x2xf32>
+// After:  hip.gather(x, [2, 1, 0] {axis = 0})
+LogicalResult lowerFlip(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || !inputType.hasStaticShape() || inputType != *resultType)
+    return op->emitError("aten.flip input must match a static result type");
+  FailureOr<SmallVector<int64_t>> dims = readI64List(op->getOperand(1));
+  if (failed(dims))
+    return op->emitError("aten.flip dims must be a constant list");
+  Location loc = op->getLoc();
+  Value current = op->getOperand(0);
+  SmallVector<bool> seen(inputType.getRank(), false);
+  for (int64_t axis : *dims) {
+    if (failed(normalizeAxis(axis, inputType.getRank())) || seen[axis])
+      return op->emitError("aten.flip dim is out of range or repeated");
+    seen[axis] = true;
+    int64_t extent = inputType.getDimSize(axis);
+    SmallVector<int64_t> reversed(extent);
+    for (int64_t index : llvm::seq<int64_t>(extent))
+      reversed[index] = extent - 1 - index;
+    auto indexType = RankedTensorType::get({extent}, builder.getI64Type());
+    Value indices = arith::ConstantOp::create(
+        builder, loc, DenseIntElementsAttr::get(indexType, reversed));
+    FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
+    if (failed(init))
+      return failure();
+    current = hip::GatherOp::create(builder, loc, context, current, indices,
+                                    *init, builder.getI64IntegerAttr(axis))
+                  ->getResult(0);
+  }
+  op->getResult(0).replaceAllUsesWith(current);
+  op->erase();
+  return success();
+}
+
 // aten.clamp(x, min, max). A `none` bound is omitted.
 // Before: clamp(x, 0.0, none) on f32
 // After:  hip.max(x, splat(0.0))
@@ -1816,6 +1855,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.div.Tensor_mode", lowerDivMode});
   rewrites.push_back({"torch.aten.pow.Scalar", lowerPow});
   rewrites.push_back({"torch.aten.repeat", lowerRepeat});
+  rewrites.push_back({"torch.aten.flip", lowerFlip});
   rewrites.push_back({"torch.aten.sigmoid", lowerSigmoid});
   rewrites.push_back({"torch.aten.tanh", lowerTanh});
   rewrites.push_back({"torch.aten.gelu", lowerGelu});
