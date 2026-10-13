@@ -30,10 +30,9 @@ ParseResult torch::parseDefaultTorchOp(OpAsmParser &parser,
       (parser.parseArrow() || parser.parseTypeList(resultTypes)))
     return failure();
   // A negative count accepts a variadic list. Zero results omit the arrow.
-  bool resultCountOk =
-      numResults < 0
-          ? !resultTypes.empty()
-          : static_cast<int>(resultTypes.size()) == numResults;
+  bool resultCountOk = numResults < 0
+                           ? !resultTypes.empty()
+                           : static_cast<int>(resultTypes.size()) == numResults;
   if (operands.size() != operandTypes.size() ||
       (numOperands >= 0 && static_cast<int>(operands.size()) != numOperands) ||
       !resultCountOk) {
@@ -90,6 +89,7 @@ TORCH_DEFAULT_FORM(AtenWhereSelfOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenScalarTensorOp, 5, 1)
 TORCH_DEFAULT_FORM(AtenFullLikeOp, 7, 1)
 TORCH_DEFAULT_FORM(AtenCloneOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenCopyOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenSoftmaxOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenEqScalarOp, 2, 1)
 TORCH_DEFAULT_FORM(AtenAllDimOp, 3, 1)
@@ -235,8 +235,9 @@ void ConstantBoolOp::print(OpAsmPrinter &printer) {
   printer << ' ' << (getValue() ? "true" : "false");
 }
 
-static ParseResult parseStringConstant(OpAsmParser &parser, OperationState &result,
-                                Type resultType) {
+static ParseResult parseStringConstant(OpAsmParser &parser,
+                                       OperationState &result,
+                                       Type resultType) {
   Attribute attr;
   if (parser.parseAttribute(attr))
     return failure();

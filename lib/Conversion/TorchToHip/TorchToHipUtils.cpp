@@ -76,8 +76,10 @@ bool multiplyDim(int64_t &product, int64_t dim) {
   return true;
 }
 
-FailureOr<Value> rightAlignTensor(OpBuilder &builder, Location loc, Value value,
-                                  int64_t targetRank) {
+} // namespace
+
+FailureOr<Value> mlir::hip::rightAlignTensor(OpBuilder &builder, Location loc,
+                                             Value value, int64_t targetRank) {
   auto type = dyn_cast<RankedTensorType>(value.getType());
   if (!type || !type.hasStaticShape() || type.getRank() == 0 ||
       type.getRank() > targetRank)
@@ -104,6 +106,8 @@ FailureOr<Value> rightAlignTensor(OpBuilder &builder, Location loc, Value value,
   return Value(tensor::ExpandShapeOp::create(builder, loc, alignedType, value,
                                              reassociation, outputShape));
 }
+
+namespace {
 
 FailureOr<Value> collapseTensor(OpBuilder &builder, Location loc, Value value,
                                 ArrayRef<ReassociationIndices> reassociation) {

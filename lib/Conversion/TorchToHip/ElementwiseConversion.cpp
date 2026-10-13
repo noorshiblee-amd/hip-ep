@@ -69,8 +69,8 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
     FailureOr<Value> promoted =
         hip::castToElementType(builder, loc, context, other, elementType);
     if (failed(promoted))
-      return op->emitError() << name
-                             << " other must be an f16, f32, or bf16 tensor";
+      return op->emitError()
+             << name << " other must be an f16, f32, or bf16 tensor";
     other = *promoted;
   }
 
@@ -139,8 +139,8 @@ LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
   if (scalarOther) {
     FailureOr<int64_t> other = readI64Scalar(rhs);
     if (failed(other))
-      return op->emitError() << "integer " << name
-                             << " other must be a constant";
+      return op->emitError()
+             << "integer " << name << " other must be a constant";
     // self ± alpha * other. Either factor being zero leaves self unchanged.
     if (*other == 0 || *alpha == 0) {
       op->getResult(0).replaceAllUsesWith(op->getOperand(0));
@@ -154,19 +154,20 @@ LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
   } else {
     auto otherType = dyn_cast<RankedTensorType>(rhs.getType());
     if (!otherType || otherType.getElementType() != inputType.getElementType())
-      return op->emitError() << "integer " << name
-                             << " other must be an i64 tensor";
+      return op->emitError()
+             << "integer " << name << " other must be an i64 tensor";
     if (*alpha != 1) {
       Value alphaValue = arith::ConstantOp::create(
           builder, loc, builder.getI64IntegerAttr(*alpha));
       auto scalarType = RankedTensorType::get({}, inputType.getElementType());
       Value alphaTensor =
           tensor::SplatOp::create(builder, loc, scalarType, alphaValue);
-      FailureOr<Value> scaled = hip::emitElementwise(
-          builder, loc, context, rhs, alphaTensor, otherType,
-          hip::ElementwiseKind::Mul);
+      FailureOr<Value> scaled =
+          hip::emitElementwise(builder, loc, context, rhs, alphaTensor,
+                               otherType, hip::ElementwiseKind::Mul);
       if (failed(scaled))
-        return op->emitError() << "integer " << name << " alpha multiply failed";
+        return op->emitError()
+               << "integer " << name << " alpha multiply failed";
       rhs = *scaled;
     }
   }
@@ -295,21 +296,20 @@ LogicalResult lowerAtenMulTensor(Operation *op, OpBuilder &builder,
                                  Value context) {
   if (!isIntegerTensorResult(op)) {
     return lowerTensorBinary(op, builder, context, hip::ElementwiseKind::Mul,
-                            "aten.mul");
+                             "aten.mul");
   }
   auto valueTensor =
       dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
   auto lhsType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
   if (!valueTensor || !lhsType || !rhsType || !lhsType.hasStaticShape() ||
-      !rhsType.hasStaticShape() ||
-      !lhsType.getElementType().isInteger(64) ||
+      !rhsType.hasStaticShape() || !lhsType.getElementType().isInteger(64) ||
       rhsType.getElementType() != lhsType.getElementType() ||
       llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
     return op->emitError("integer aten.mul requires static i64 tensors");
   }
-  auto resultType = RankedTensorType::get(valueTensor.getSizes(),
-                                          lhsType.getElementType());
+  auto resultType =
+      RankedTensorType::get(valueTensor.getSizes(), lhsType.getElementType());
   FailureOr<Value> result = hip::emitElementwise(
       builder, op->getLoc(), context, op->getOperand(0), op->getOperand(1),
       resultType, hip::ElementwiseKind::Mul);
@@ -715,8 +715,8 @@ LogicalResult lowerAtenConvolution(Operation *op, OpBuilder &builder,
     return op->emitError(
         "aten.convolution weight must be a static ranked tensor");
   FailureOr<bool> transposed = readI1Scalar(op->getOperand(6));
-  if (failed(transposed) || *transposed)
-    return op->emitError("aten.convolution transposed must be false");
+  if (failed(transposed))
+    return op->emitError("aten.convolution transposed must be a constant");
   FailureOr<int64_t> groups = readI64Scalar(op->getOperand(8));
   if (failed(groups) || *groups < 1)
     return op->emitError("aten.convolution groups must be a positive constant");
@@ -753,8 +753,26 @@ LogicalResult lowerAtenConvolution(Operation *op, OpBuilder &builder,
       builder.getNamedAttr("pads", builder.getI64ArrayAttr(pads)),
       builder.getNamedAttr("dilations", builder.getI64ArrayAttr(*dilation)),
       builder.getNamedAttr("group", builder.getI64IntegerAttr(*groups))};
-  auto conv = hip::ConvOp::create(builder, op->getLoc(), operands, attrs);
-  op->getResult(0).replaceAllUsesWith(conv.getResult(0));
+  Value result;
+  if (*transposed) {
+    // Torch and hip.conv_transpose share the [C_in, C_out / group, k...]
+    // weight layout.
+    FailureOr<SmallVector<int64_t>> outputPadding =
+        readI64List(op->getOperand(7));
+    if (failed(outputPadding) ||
+        static_cast<int64_t>(outputPadding->size()) != spatial)
+      return op->emitError(
+          "aten.convolution output_padding must be a constant list");
+    attrs.push_back(builder.getNamedAttr(
+        "output_padding", builder.getI64ArrayAttr(*outputPadding)));
+    result = hip::ConvTransposeOp::create(
+                 builder, op->getLoc(), TypeRange{*resultType}, operands, attrs)
+                 .getResult(0);
+  } else {
+    result = hip::ConvOp::create(builder, op->getLoc(), operands, attrs)
+                 .getResult(0);
+  }
+  op->getResult(0).replaceAllUsesWith(result);
   op->erase();
   return success();
 }

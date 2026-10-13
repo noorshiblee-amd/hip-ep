@@ -286,6 +286,13 @@ def AtenCloneOp : Torch_Op<"aten.clone", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenCopyOp : Torch_Op<"aten.copy", [Pure]> {
+  let summary = "Value-semantic copy of src into the shape of self";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$src,
+                       TorchBoolType:$non_blocking);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenSoftmaxOp : Torch_Op<"aten._softmax", [Pure]> {
   let summary = "Softmax over one dimension";
   let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$half_to_float);

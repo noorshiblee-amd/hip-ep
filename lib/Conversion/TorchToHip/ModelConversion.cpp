@@ -141,8 +141,8 @@ FailureOr<Value> scalarTensor(OpBuilder &builder, Location loc, Value scalar,
   Type source = scalar.getType();
   if (source != elementType) {
     if (isa<FloatType>(elementType)) {
-      FailureOr<Value> materialized = hip::materializeScalarTensor(
-          builder, loc, scalar, elementType);
+      FailureOr<Value> materialized =
+          hip::materializeScalarTensor(builder, loc, scalar, elementType);
       if (failed(materialized))
         return failure();
       return materialized;
@@ -154,8 +154,7 @@ FailureOr<Value> scalarTensor(OpBuilder &builder, Location loc, Value scalar,
     if (sourceBits > destBits)
       converted = arith::TruncIOp::create(builder, loc, elementType, scalar);
     else if (sourceBits < destBits)
-      converted =
-          arith::ExtUIOp::create(builder, loc, elementType, scalar);
+      converted = arith::ExtUIOp::create(builder, loc, elementType, scalar);
   }
   auto type = RankedTensorType::get({}, elementType);
   return Value(tensor::SplatOp::create(builder, loc, type, converted));
@@ -201,9 +200,9 @@ LogicalResult lowerExpand(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return op->emitError("aten.expand requires a static result shape");
-  auto expanded = hip::ExpandOp::create(builder, op->getLoc(), context,
-                                        op->getOperand(0), op->getOperand(1),
-                                        *init);
+  auto expanded =
+      hip::ExpandOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                            op->getOperand(1), *init);
   op->getResult(0).replaceAllUsesWith(expanded->getResult(0));
   op->erase();
   return success();
@@ -221,8 +220,7 @@ LogicalResult lowerBmm(Operation *op, OpBuilder &builder, Value context) {
       builder.getNamedAttr("transB", builder.getI64IntegerAttr(0))};
   SmallVector<Value> operands = {context, op->getOperand(0), op->getOperand(1),
                                  *init};
-  auto matmul =
-      hip::MatmulOp::create(builder, op->getLoc(), operands, attrs);
+  auto matmul = hip::MatmulOp::create(builder, op->getLoc(), operands, attrs);
   op->getResult(0).replaceAllUsesWith(matmul.getResult(0));
   op->erase();
   return success();
@@ -259,18 +257,18 @@ LogicalResult lowerVarMean(Operation *op, OpBuilder &builder, Value context) {
       hip::ElementwiseKind::Sub);
   if (failed(centered))
     return op->emitError("aten.var_mean cannot subtract the mean");
-  FailureOr<Value> squared = hip::emitElementwise(
-      builder, loc, context, *centered, *centered, inputType,
-      hip::ElementwiseKind::Mul);
+  FailureOr<Value> squared =
+      hip::emitElementwise(builder, loc, context, *centered, *centered,
+                           inputType, hip::ElementwiseKind::Mul);
   if (failed(squared))
     return op->emitError("aten.var_mean cannot square the residual");
   FailureOr<Value> varInit = emptyStatic(builder, loc, *varType);
   if (failed(varInit))
     return failure();
-  auto variance = hip::ReduceMeanOp::create(
-      builder, loc, context, *squared, axes, *varInit,
-      builder.getI64IntegerAttr(*keepdim ? 1 : 0),
-      builder.getI64IntegerAttr(0));
+  auto variance =
+      hip::ReduceMeanOp::create(builder, loc, context, *squared, axes, *varInit,
+                                builder.getI64IntegerAttr(*keepdim ? 1 : 0),
+                                builder.getI64IntegerAttr(0));
   Value var = variance->getResult(0);
   if (*correction != 0) {
     int64_t count = 1;
@@ -284,14 +282,14 @@ LogicalResult lowerVarMean(Operation *op, OpBuilder &builder, Value context) {
     auto scaleAttr = builder.getFloatAttr(
         builder.getF32Type(),
         static_cast<double>(count) / static_cast<double>(count - *correction));
-    Value scaleScalar =
-        arith::ConstantOp::create(builder, loc, scaleAttr);
+    Value scaleScalar = arith::ConstantOp::create(builder, loc, scaleAttr);
     FailureOr<Value> scale = hip::materializeScalarTensor(
         builder, loc, scaleScalar, varType->getElementType());
     if (failed(scale))
       return failure();
-    FailureOr<Value> scaled = hip::emitElementwise(
-        builder, loc, context, var, *scale, *varType, hip::ElementwiseKind::Mul);
+    FailureOr<Value> scaled =
+        hip::emitElementwise(builder, loc, context, var, *scale, *varType,
+                             hip::ElementwiseKind::Mul);
     if (failed(scaled))
       return failure();
     var = *scaled;
@@ -309,9 +307,9 @@ LogicalResult lowerWhere(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return op->emitError("aten.where requires a static result shape");
-  auto selected = hip::WhereOp::create(
-      builder, op->getLoc(), context, op->getOperand(0), op->getOperand(1),
-      op->getOperand(2), *init);
+  auto selected =
+      hip::WhereOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                           op->getOperand(1), op->getOperand(2), *init);
   op->getResult(0).replaceAllUsesWith(selected->getResult(0));
   op->erase();
   return success();
@@ -322,9 +320,8 @@ LogicalResult lowerScalarTensor(Operation *op, OpBuilder &builder,
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType) || resultType->getRank() != 0)
     return op->emitError("aten.scalar_tensor requires a rank-0 result");
-  FailureOr<Value> value = scalarTensor(builder, op->getLoc(),
-                                        op->getOperand(0),
-                                        resultType->getElementType());
+  FailureOr<Value> value = scalarTensor(
+      builder, op->getLoc(), op->getOperand(0), resultType->getElementType());
   if (failed(value))
     return op->emitError("aten.scalar_tensor cannot materialize its value");
   op->getResult(0).replaceAllUsesWith(*value);
@@ -337,7 +334,7 @@ LogicalResult lowerFullLike(Operation *op, OpBuilder &builder, Value context) {
   if (failed(resultType))
     return failure();
   FailureOr<Value> fill = scalarTensor(builder, op->getLoc(), op->getOperand(1),
-                                      resultType->getElementType());
+                                       resultType->getElementType());
   if (failed(fill))
     return op->emitError("aten.full_like cannot materialize its fill value");
   Value result = *fill;
@@ -358,6 +355,20 @@ LogicalResult lowerFullLike(Operation *op, OpBuilder &builder, Value context) {
 LogicalResult lowerClone(Operation *op, OpBuilder & /*builder*/,
                          Value /*context*/) {
   op->getResult(0).replaceAllUsesWith(op->getOperand(0));
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerCopy(Operation *op, OpBuilder & /*builder*/,
+                        Value /*context*/) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  Value src = op->getOperand(1);
+  if (src.getType() != *resultType)
+    return op->emitError(
+        "aten.copy requires src to match the result shape and element type");
+  op->getResult(0).replaceAllUsesWith(src);
   op->erase();
   return success();
 }
@@ -390,8 +401,7 @@ LogicalResult lowerSoftmax(Operation *op, OpBuilder &builder, Value context) {
     SmallVector<int64_t> moved;
     for (int64_t index : forward)
       moved.push_back(inputType.getDimSize(index));
-    auto movedType =
-        RankedTensorType::get(moved, inputType.getElementType());
+    auto movedType = RankedTensorType::get(moved, inputType.getElementType());
     FailureOr<Value> transposed =
         transposeTo(builder, loc, context, input, forward, movedType);
     if (failed(transposed))
@@ -409,8 +419,8 @@ LogicalResult lowerSoftmax(Operation *op, OpBuilder &builder, Value context) {
     SmallVector<int64_t> backward(forward.size());
     for (auto [index, source] : llvm::enumerate(forward))
       backward[source] = static_cast<int64_t>(index);
-    FailureOr<Value> restored = transposeTo(builder, loc, context, softmaxed,
-                                            backward, *resultType);
+    FailureOr<Value> restored =
+        transposeTo(builder, loc, context, softmaxed, backward, *resultType);
     if (failed(restored))
       return failure();
     softmaxed = *restored;
@@ -427,9 +437,8 @@ LogicalResult lowerEqScalar(Operation *op, OpBuilder &builder, Value context) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType)
     return op->emitError("aten.eq.Scalar requires a ranked input");
-  FailureOr<Value> other = scalarTensor(builder, op->getLoc(),
-                                        op->getOperand(1),
-                                        inputType.getElementType());
+  FailureOr<Value> other = scalarTensor(
+      builder, op->getLoc(), op->getOperand(1), inputType.getElementType());
   if (failed(other))
     return op->emitError("aten.eq.Scalar cannot materialize its scalar");
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
@@ -481,9 +490,12 @@ LogicalResult lowerArange(Operation *op, OpBuilder &builder, Value context) {
     return failure();
   Location loc = op->getLoc();
   Type element = resultType->getElementType();
-  FailureOr<Value> start = scalarTensor(builder, loc, op->getOperand(0), element);
-  FailureOr<Value> limit = scalarTensor(builder, loc, op->getOperand(1), element);
-  FailureOr<Value> delta = scalarTensor(builder, loc, op->getOperand(2), element);
+  FailureOr<Value> start =
+      scalarTensor(builder, loc, op->getOperand(0), element);
+  FailureOr<Value> limit =
+      scalarTensor(builder, loc, op->getOperand(1), element);
+  FailureOr<Value> delta =
+      scalarTensor(builder, loc, op->getOperand(2), element);
   FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
   if (failed(start) || failed(limit) || failed(delta) || failed(init))
     return op->emitError("aten.arange cannot materialize its bounds");
@@ -535,9 +547,9 @@ LogicalResult lowerSlice(Operation *op, OpBuilder &builder, Value /*context*/) {
     sizes.push_back(builder.getIndexAttr(resultType->getDimSize(index)));
   offsets[axis] = builder.getIndexAttr(begin);
   strides[axis] = builder.getIndexAttr(*step);
-  auto sliced = tensor::ExtractSliceOp::create(
-      builder, op->getLoc(), *resultType, op->getOperand(0), offsets, sizes,
-      strides);
+  auto sliced = tensor::ExtractSliceOp::create(builder, op->getLoc(),
+                                               *resultType, op->getOperand(0),
+                                               offsets, sizes, strides);
   op->getResult(0).replaceAllUsesWith(sliced.getResult());
   op->erase();
   return success();
@@ -568,9 +580,9 @@ LogicalResult lowerBitwiseAnd(Operation *op, OpBuilder &builder,
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return failure();
-  auto combined = hip::AndOp::create(builder, op->getLoc(), context,
-                                     op->getOperand(0), op->getOperand(1),
-                                     *init);
+  auto combined =
+      hip::AndOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                         op->getOperand(1), *init);
   op->getResult(0).replaceAllUsesWith(combined->getResult(0));
   op->erase();
   return success();
@@ -592,8 +604,8 @@ LogicalResult lowerConvert(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
     return failure();
-  FailureOr<Value> casted = hipCast(builder, op->getLoc(), context,
-                                    op->getOperand(0), *resultType);
+  FailureOr<Value> casted =
+      hipCast(builder, op->getLoc(), context, op->getOperand(0), *resultType);
   if (failed(casted))
     return op->emitError("prims.convert_element_type cannot cast");
   op->getResult(0).replaceAllUsesWith(*casted);
@@ -601,7 +613,7 @@ LogicalResult lowerConvert(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
-LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value /*context*/) {
+LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value context) {
   Operation *list = op->getOperand(0).getDefiningOp();
   if (!list || list->getName().getStringRef() != "torch.prim.ListConstruct")
     return op->emitError("aten.cat expects a prim.ListConstruct");
@@ -619,8 +631,23 @@ LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value /*context*/) {
   int64_t axis = *dim;
   if (failed(normalizeAxis(axis, inputType.getRank())))
     return op->emitError("aten.cat dim is out of range");
-  auto concat = tensor::ConcatOp::create(builder, op->getLoc(), axis,
-                                         list->getOperands());
+  // Torch promotes mixed-dtype inputs to the result element type.
+  SmallVector<Value> inputs;
+  for (Value input : list->getOperands()) {
+    auto type = dyn_cast<RankedTensorType>(input.getType());
+    if (!type)
+      return op->emitError("aten.cat inputs must be ranked tensors");
+    if (type.getElementType() != resultType->getElementType()) {
+      FailureOr<Value> casted = hipCast(
+          builder, op->getLoc(), context, input,
+          RankedTensorType::get(type.getShape(), resultType->getElementType()));
+      if (failed(casted))
+        return op->emitError("aten.cat cannot cast an input");
+      input = *casted;
+    }
+    inputs.push_back(input);
+  }
+  auto concat = tensor::ConcatOp::create(builder, op->getLoc(), axis, inputs);
   if (concat.getResult().getType() != *resultType)
     return op->emitError("aten.cat result shape does not match");
   op->getResult(0).replaceAllUsesWith(concat.getResult());
@@ -663,8 +690,8 @@ LogicalResult lowerCumsum(Operation *op, OpBuilder &builder, Value context) {
 }
 
 template <typename HipOp>
-LogicalResult lowerUnaryTensor(Operation *op, OpBuilder &builder,
-                               Value context, StringRef name) {
+LogicalResult lowerUnaryTensor(Operation *op, OpBuilder &builder, Value context,
+                               StringRef name) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
     return failure();
@@ -719,9 +746,9 @@ LogicalResult lowerUnaryInferred(Operation *op, OpBuilder &builder,
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return op->emitError() << name << " requires a static result shape";
-  Value result = HipOp::create(builder, op->getLoc(), context, op->getOperand(0),
-                               *init)
-                     ->getResult(0);
+  Value result =
+      HipOp::create(builder, op->getLoc(), context, op->getOperand(0), *init)
+          ->getResult(0);
   op->getResult(0).replaceAllUsesWith(result);
   op->erase();
   return success();
@@ -747,7 +774,8 @@ LogicalResult lowerSqrt(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryInferred<hip::SqrtOp>(op, builder, context, "aten.sqrt");
 }
 
-LogicalResult lowerBitwiseNot(Operation *op, OpBuilder &builder, Value context) {
+LogicalResult lowerBitwiseNot(Operation *op, OpBuilder &builder,
+                              Value context) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType || !inputType.getElementType().isInteger(1))
     return op->emitError("aten.bitwise_not only lowers an i1 tensor");
@@ -764,9 +792,8 @@ LogicalResult lowerScalarOrder(Operation *op, OpBuilder &builder, Value context,
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType)
     return op->emitError() << name << " requires a ranked input";
-  FailureOr<Value> other = scalarTensor(builder, op->getLoc(),
-                                        op->getOperand(1),
-                                        inputType.getElementType());
+  FailureOr<Value> other = scalarTensor(
+      builder, op->getLoc(), op->getOperand(1), inputType.getElementType());
   if (failed(other))
     return op->emitError() << name << " cannot materialize its scalar";
   Location loc = op->getLoc();
@@ -782,8 +809,8 @@ LogicalResult lowerScalarOrder(Operation *op, OpBuilder &builder, Value context,
     FailureOr<Value> notInit = emptyStatic(builder, loc, *resultType);
     if (failed(notInit))
       return failure();
-    result = hip::NotOp::create(builder, loc, context, less, *notInit)
-                 ->getResult(0);
+    result =
+        hip::NotOp::create(builder, loc, context, less, *notInit)->getResult(0);
   }
   op->getResult(0).replaceAllUsesWith(result);
   op->erase();
@@ -831,8 +858,8 @@ LogicalResult lowerGather(Operation *op, OpBuilder &builder, Value context) {
     return failure();
   Value gathered =
       hip::GatherElementsOp::create(builder, op->getLoc(), context,
-                                   op->getOperand(0), op->getOperand(2), *init,
-                                   builder.getI64IntegerAttr(axis))
+                                    op->getOperand(0), op->getOperand(2), *init,
+                                    builder.getI64IntegerAttr(axis))
           ->getResult(0);
   op->getResult(0).replaceAllUsesWith(gathered);
   op->erase();
@@ -844,8 +871,8 @@ LogicalResult lowerGelu(Operation *op, OpBuilder &builder, Value context) {
   if (failed(resultType))
     return failure();
   auto approximate = op->getOperand(1).getDefiningOp<torch::ConstantStrOp>();
-  if (!approximate || (approximate.getValue() != "none" &&
-                       approximate.getValue() != "tanh")) {
+  if (!approximate ||
+      (approximate.getValue() != "none" && approximate.getValue() != "tanh")) {
     return op->emitError("aten.gelu approximate must be \"none\" or \"tanh\"");
   }
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
@@ -867,19 +894,17 @@ LogicalResult lowerEmbedding(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<int64_t> padding = readI64Scalar(op->getOperand(2));
   FailureOr<bool> scale = readI1Scalar(op->getOperand(3));
   FailureOr<bool> sparse = readI1Scalar(op->getOperand(4));
-  if (failed(padding) || failed(scale) || failed(sparse) || *scale ||
-      *sparse) {
+  if (failed(padding) || failed(scale) || failed(sparse) || *scale || *sparse) {
     return op->emitError(
         "aten.embedding only lowers padding_idx with scale/sparse false");
   }
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return failure();
-  Value gathered =
-      hip::GatherOp::create(builder, op->getLoc(), context, op->getOperand(0),
-                            op->getOperand(1), *init,
-                            builder.getI64IntegerAttr(0))
-          ->getResult(0);
+  Value gathered = hip::GatherOp::create(builder, op->getLoc(), context,
+                                         op->getOperand(0), op->getOperand(1),
+                                         *init, builder.getI64IntegerAttr(0))
+                       ->getResult(0);
   op->getResult(0).replaceAllUsesWith(gathered);
   op->erase();
   return success();
@@ -899,9 +924,9 @@ LogicalResult lowerEqTensor(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return failure();
-  auto compared = hip::EqualOp::create(builder, op->getLoc(), context,
-                                       op->getOperand(0), op->getOperand(1),
-                                       *init);
+  auto compared =
+      hip::EqualOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                           op->getOperand(1), *init);
   op->getResult(0).replaceAllUsesWith(compared->getResult(0));
   op->erase();
   return success();
@@ -920,8 +945,8 @@ LogicalResult lowerLeTensor(Operation *op, OpBuilder &builder, Value context) {
   Value less = hip::LessOp::create(builder, loc, context, op->getOperand(1),
                                    op->getOperand(0), *lessInit)
                    ->getResult(0);
-  Value le = hip::NotOp::create(builder, loc, context, less, *notInit)
-                 ->getResult(0);
+  Value le =
+      hip::NotOp::create(builder, loc, context, less, *notInit)->getResult(0);
   op->getResult(0).replaceAllUsesWith(le);
   op->erase();
   return success();
@@ -948,12 +973,11 @@ LogicalResult lowerMeanDim(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return failure();
-  Value mean =
-      hip::ReduceMeanOp::create(builder, op->getLoc(), context,
-                                op->getOperand(0), axes, *init,
-                                builder.getI64IntegerAttr(*keepdim ? 1 : 0),
-                                builder.getI64IntegerAttr(0))
-          ->getResult(0);
+  Value mean = hip::ReduceMeanOp::create(
+                   builder, op->getLoc(), context, op->getOperand(0), axes,
+                   *init, builder.getI64IntegerAttr(*keepdim ? 1 : 0),
+                   builder.getI64IntegerAttr(0))
+                   ->getResult(0);
   op->getResult(0).replaceAllUsesWith(mean);
   op->erase();
   return success();
@@ -997,9 +1021,9 @@ LogicalResult lowerPowTensorScalar(Operation *op, OpBuilder &builder,
   Location loc = op->getLoc();
   Value input = op->getOperand(0);
   if (*exponent == 2) {
-    FailureOr<Value> squared = hip::emitElementwise(
-        builder, loc, context, input, input, *resultType,
-        hip::ElementwiseKind::Mul);
+    FailureOr<Value> squared =
+        hip::emitElementwise(builder, loc, context, input, input, *resultType,
+                             hip::ElementwiseKind::Mul);
     if (failed(squared))
       return op->emitError("aten.pow.Tensor_Scalar square failed");
     op->getResult(0).replaceAllUsesWith(*squared);
@@ -1014,9 +1038,9 @@ LogicalResult lowerPowTensorScalar(Operation *op, OpBuilder &builder,
                                         resultType->getElementType());
   if (failed(scale))
     return op->emitError("aten.pow.Tensor_Scalar cannot materialize exponent");
-  FailureOr<Value> product = hip::emitElementwise(
-      builder, loc, context, *logged, *scale, *resultType,
-      hip::ElementwiseKind::Mul);
+  FailureOr<Value> product =
+      hip::emitElementwise(builder, loc, context, *logged, *scale, *resultType,
+                           hip::ElementwiseKind::Mul);
   if (failed(product))
     return op->emitError("aten.pow.Tensor_Scalar scale failed");
   FailureOr<Value> raised =
@@ -1030,9 +1054,8 @@ LogicalResult lowerPowTensorScalar(Operation *op, OpBuilder &builder,
 
 LogicalResult lowerIntBool(Operation *op, OpBuilder &builder,
                            Value /*context*/) {
-  Value extended = arith::ExtUIOp::create(builder, op->getLoc(),
-                                          builder.getI64Type(),
-                                          op->getOperand(0));
+  Value extended = arith::ExtUIOp::create(
+      builder, op->getLoc(), builder.getI64Type(), op->getOperand(0));
   op->getResult(0).replaceAllUsesWith(extended);
   op->erase();
   return success();
@@ -1045,9 +1068,8 @@ LogicalResult lowerGeScalar(Operation *op, OpBuilder &builder, Value context) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType)
     return op->emitError("aten.ge.Scalar requires a ranked input");
-  FailureOr<Value> other = scalarTensor(builder, op->getLoc(),
-                                        op->getOperand(1),
-                                        inputType.getElementType());
+  FailureOr<Value> other = scalarTensor(
+      builder, op->getLoc(), op->getOperand(1), inputType.getElementType());
   if (failed(other))
     return op->emitError("aten.ge.Scalar cannot materialize its scalar");
   Location loc = op->getLoc();
@@ -1163,15 +1185,15 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
 
   Location loc = op->getLoc();
   SmallVector<Value> stacked;
-  auto broadcastType =
-      RankedTensorType::get(broadcast, builder.getI64Type());
+  auto broadcastType = RankedTensorType::get(broadcast, builder.getI64Type());
   for (Value index : list->getOperands()) {
     Value current = index;
     auto indexType = cast<RankedTensorType>(index.getType());
     if (indexType.getElementType() != builder.getI64Type()) {
       auto castType =
           RankedTensorType::get(indexType.getShape(), builder.getI64Type());
-      FailureOr<Value> casted = hipCast(builder, loc, context, current, castType);
+      FailureOr<Value> casted =
+          hipCast(builder, loc, context, current, castType);
       if (failed(casted))
         return op->emitError("aten.index.Tensor cannot cast an index");
       current = *casted;
@@ -1206,9 +1228,9 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
   if (failed(init))
     return failure();
-  auto gathered = hip::GatherNDOp::create(builder, loc, context,
-                                          op->getOperand(0), indices, *init,
-                                          builder.getI64IntegerAttr(0));
+  auto gathered =
+      hip::GatherNDOp::create(builder, loc, context, op->getOperand(0), indices,
+                              *init, builder.getI64IntegerAttr(0));
   op->getResult(0).replaceAllUsesWith(gathered->getResult(0));
   op->erase();
   return success();
@@ -1228,14 +1250,16 @@ LogicalResult lowerMaxPoolIndices(Operation *op, OpBuilder &builder,
   FailureOr<bool> ceilMode = readI1Scalar(op->getOperand(5));
   if (failed(kernel) || failed(strides) || failed(padding) ||
       failed(dilation) || failed(ceilMode)) {
-    return op->emitError("aten.max_pool2d_with_indices window must be constant");
+    return op->emitError(
+        "aten.max_pool2d_with_indices window must be constant");
   }
   int64_t spatial = static_cast<int64_t>(kernel->size());
   SmallVector<int64_t> pads;
   if (spatial == 0 || static_cast<int64_t>(strides->size()) != spatial ||
       static_cast<int64_t>(dilation->size()) != spatial ||
       static_cast<int64_t>(padding->size()) != spatial) {
-    return op->emitError("aten.max_pool2d_with_indices window ranks do not match");
+    return op->emitError(
+        "aten.max_pool2d_with_indices window ranks do not match");
   }
   pads.append(padding->begin(), padding->end());
   pads.append(padding->begin(), padding->end());
@@ -1292,13 +1316,13 @@ LogicalResult lowerSelect(Operation *op, OpBuilder &builder,
     sizes.push_back(builder.getIndexAttr(dimSize));
   offsets[axis] = builder.getIndexAttr(chosen);
   Location loc = op->getLoc();
-  Value sliced = tensor::ExtractSliceOp::create(builder, loc, midType,
-                                                op->getOperand(0), offsets,
-                                                sizes, strides)
-                     .getResult();
+  Value sliced =
+      tensor::ExtractSliceOp::create(builder, loc, midType, op->getOperand(0),
+                                     offsets, sizes, strides)
+          .getResult();
   Value shape = i64Vector(builder, loc, resultType->getShape());
-  auto reshaped = tensor::ReshapeOp::create(builder, loc, *resultType, sliced,
-                                            shape);
+  auto reshaped =
+      tensor::ReshapeOp::create(builder, loc, *resultType, sliced, shape);
   op->getResult(0).replaceAllUsesWith(reshaped.getResult());
   op->erase();
   return success();
@@ -1309,9 +1333,8 @@ LogicalResult lowerNumToTensor(Operation *op, OpBuilder &builder,
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
     return failure();
-  FailureOr<Value> value = scalarTensor(builder, op->getLoc(),
-                                        op->getOperand(0),
-                                        resultType->getElementType());
+  FailureOr<Value> value = scalarTensor(
+      builder, op->getLoc(), op->getOperand(0), resultType->getElementType());
   if (failed(value))
     return op->emitError("prim.NumToTensor cannot materialize its scalar");
   op->getResult(0).replaceAllUsesWith(*value);
@@ -1331,17 +1354,17 @@ LogicalResult lowerDivMode(Operation *op, OpBuilder &builder, Value context) {
   if (!rhsType)
     return op->emitError("aten.div.Tensor_mode requires a ranked divisor");
   if (rhsType.getElementType() != resultType->getElementType()) {
-    auto castType = RankedTensorType::get(rhsType.getShape(),
-                                          resultType->getElementType());
+    auto castType =
+        RankedTensorType::get(rhsType.getShape(), resultType->getElementType());
     FailureOr<Value> casted =
         hipCast(builder, op->getLoc(), context, rhs, castType);
     if (failed(casted))
       return op->emitError("aten.div.Tensor_mode cannot cast its divisor");
     rhs = *casted;
   }
-  FailureOr<Value> quotient = hip::emitElementwise(
-      builder, op->getLoc(), context, op->getOperand(0), rhs, *resultType,
-      hip::ElementwiseKind::Div);
+  FailureOr<Value> quotient =
+      hip::emitElementwise(builder, op->getLoc(), context, op->getOperand(0),
+                           rhs, *resultType, hip::ElementwiseKind::Div);
   if (failed(quotient))
     return op->emitError("aten.div.Tensor_mode division failed");
   FailureOr<Value> floored = unaryHip<hip::FloorOp>(
@@ -1359,7 +1382,7 @@ LogicalResult lowerPow(Operation *op, OpBuilder &builder, Value context) {
     return failure();
   Location loc = op->getLoc();
   FailureOr<Value> base = scalarTensor(builder, loc, op->getOperand(0),
-                                      resultType->getElementType());
+                                       resultType->getElementType());
   if (failed(base))
     return op->emitError("aten.pow.Scalar cannot materialize its base");
   auto baseType = RankedTensorType::get({}, resultType->getElementType());
@@ -1367,9 +1390,9 @@ LogicalResult lowerPow(Operation *op, OpBuilder &builder, Value context) {
       unaryHip<hip::LogOp>(builder, loc, context, *base, baseType);
   if (failed(logged))
     return failure();
-  FailureOr<Value> product = hip::emitElementwise(
-      builder, loc, context, op->getOperand(1), *logged, *resultType,
-      hip::ElementwiseKind::Mul);
+  FailureOr<Value> product =
+      hip::emitElementwise(builder, loc, context, op->getOperand(1), *logged,
+                           *resultType, hip::ElementwiseKind::Mul);
   if (failed(product))
     return op->emitError("aten.pow.Scalar product failed");
   FailureOr<Value> raised =
@@ -1388,14 +1411,20 @@ LogicalResult lowerRepeat(Operation *op, OpBuilder &builder, Value context) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   FailureOr<SmallVector<int64_t>> repeats = readI64List(op->getOperand(1));
   if (!inputType || failed(repeats) ||
-      static_cast<int64_t>(repeats->size()) != inputType.getRank()) {
-    return op->emitError("aten.repeat list must match the input rank");
+      static_cast<int64_t>(repeats->size()) < inputType.getRank()) {
+    return op->emitError("aten.repeat list must cover the input rank");
   }
+  // Extra repeat factors prepend size-1 dimensions to the input.
+  FailureOr<Value> input =
+      hip::rightAlignTensor(builder, op->getLoc(), op->getOperand(0),
+                            static_cast<int64_t>(repeats->size()));
+  if (failed(input))
+    return op->emitError("aten.repeat cannot align the input rank");
   FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
   if (failed(init))
     return failure();
-  auto tiled = hip::TileOp::create(builder, op->getLoc(), context,
-                                   op->getOperand(0), op->getOperand(1), *init);
+  auto tiled = hip::TileOp::create(builder, op->getLoc(), context, *input,
+                                   op->getOperand(1), *init);
   op->getResult(0).replaceAllUsesWith(tiled->getResult(0));
   op->erase();
   return success();
@@ -1413,8 +1442,7 @@ LogicalResult lowerClamp(Operation *op, OpBuilder &builder, Value context) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType ||
       inputType.getElementType() != resultType->getElementType()) {
-    return op->emitError(
-        "aten.clamp input element type must match the result");
+    return op->emitError("aten.clamp input element type must match the result");
   }
   Location loc = op->getLoc();
   Value current = op->getOperand(0);
@@ -1485,8 +1513,8 @@ LogicalResult lowerConstantPad(Operation *op, OpBuilder &builder,
   if (failed(fill) || failed(init))
     return op->emitError("aten.constant_pad_nd requires a scalar fill value");
   auto padded = hip::PadOp::create(builder, loc, context, op->getOperand(0),
-                                  i64Vector(builder, loc, onnxPads), *fill,
-                                  /*axes=*/Value(), *init, "constant");
+                                   i64Vector(builder, loc, onnxPads), *fill,
+                                   /*axes=*/Value(), *init, "constant");
   op->getResult(0).replaceAllUsesWith(padded->getResult(0));
   op->erase();
   return success();
@@ -1574,8 +1602,8 @@ LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
       hip::ElementwiseKind::Mul);
   if (failed(squared))
     return op->emitError("aten.linalg_vector_norm square failed");
-  auto reducedType = RankedTensorType::get(resultType->getShape(),
-                                           inputType.getElementType());
+  auto reducedType =
+      RankedTensorType::get(resultType->getShape(), inputType.getElementType());
   FailureOr<Value> sumInit = emptyStatic(builder, loc, reducedType);
   FailureOr<Value> sqrtInit = emptyStatic(builder, loc, *resultType);
   if (failed(sumInit) || failed(sqrtInit))
@@ -1593,9 +1621,8 @@ LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
       return op->emitError("aten.linalg_vector_norm cannot cast its sum");
     summed = *casted;
   }
-  Value rooted =
-      hip::SqrtOp::create(builder, loc, context, summed, *sqrtInit)
-          ->getResult(0);
+  Value rooted = hip::SqrtOp::create(builder, loc, context, summed, *sqrtInit)
+                     ->getResult(0);
   op->getResult(0).replaceAllUsesWith(rooted);
   op->erase();
   return success();
@@ -1610,7 +1637,7 @@ LogicalResult lowerGtTensor(Operation *op, OpBuilder &builder, Value context) {
     return failure();
   // A > B  <=>  B < A. hip.less broadcasts the two inputs.
   Value less = hip::LessOp::create(builder, op->getLoc(), context,
-                                  op->getOperand(1), op->getOperand(0), *init)
+                                   op->getOperand(1), op->getOperand(0), *init)
                    ->getResult(0);
   op->getResult(0).replaceAllUsesWith(less);
   op->erase();
@@ -1625,8 +1652,8 @@ emitTopK(OpBuilder &builder, Location loc, Value context, Value input,
   FailureOr<Value> indicesInit = emptyStatic(builder, loc, indicesType);
   if (failed(valuesInit) || failed(indicesInit))
     return failure();
-  Value kScalar = arith::ConstantOp::create(builder, loc,
-                                            builder.getI64IntegerAttr(k));
+  Value kScalar =
+      arith::ConstantOp::create(builder, loc, builder.getI64IntegerAttr(k));
   auto kType = RankedTensorType::get({}, builder.getI64Type());
   Value kTensor = tensor::SplatOp::create(builder, loc, kType, kScalar);
   auto top = hip::TopKOp::create(
@@ -1710,8 +1737,7 @@ LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
   Operation *split = op->getOperand(0).getDefiningOp();
   if (!split ||
       split->getName().getStringRef() != "torch.aten.split_with_sizes") {
-    return op->emitError(
-        "prim.ListUnpack only lowers a split_with_sizes list");
+    return op->emitError("prim.ListUnpack only lowers a split_with_sizes list");
   }
   auto inputType = dyn_cast<RankedTensorType>(split->getOperand(0).getType());
   FailureOr<SmallVector<int64_t>> sizes = readI64List(split->getOperand(1));
@@ -1726,7 +1752,8 @@ LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
   int64_t cursor = 0;
   for (auto [index, section] : llvm::enumerate(*sizes)) {
     if (section < 0)
-      return op->emitError("aten.split_with_sizes section must be non-negative");
+      return op->emitError(
+          "aten.split_with_sizes section must be non-negative");
     FailureOr<RankedTensorType> resultType = resultTensor(op, index);
     if (failed(resultType) || resultType->getDimSize(axis) != section)
       return op->emitError("aten.split_with_sizes result size does not match");
@@ -1746,7 +1773,8 @@ LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
     cursor += section;
   }
   if (cursor != inputType.getDimSize(axis))
-    return op->emitError("aten.split_with_sizes sections do not cover the axis");
+    return op->emitError(
+        "aten.split_with_sizes sections do not cover the axis");
   op->erase();
   split->erase();
   return success();
@@ -1763,6 +1791,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.scalar_tensor", lowerScalarTensor});
   rewrites.push_back({"torch.aten.full_like", lowerFullLike});
   rewrites.push_back({"torch.aten.clone", lowerClone});
+  rewrites.push_back({"torch.aten.copy", lowerCopy});
   rewrites.push_back({"torch.aten._softmax", lowerSoftmax});
   rewrites.push_back({"torch.aten.eq.Scalar", lowerEqScalar});
   rewrites.push_back({"torch.aten.all.dim", lowerAllDim});
@@ -1780,7 +1809,8 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.Int.bool", lowerIntBool});
   rewrites.push_back({"torch.aten.ge.Scalar", lowerGeScalar});
   rewrites.push_back({"torch.aten.index.Tensor", lowerIndex});
-  rewrites.push_back({"torch.aten.max_pool2d_with_indices", lowerMaxPoolIndices});
+  rewrites.push_back(
+      {"torch.aten.max_pool2d_with_indices", lowerMaxPoolIndices});
   rewrites.push_back({"torch.aten.select.int", lowerSelect});
   rewrites.push_back({"torch.prim.NumToTensor.Scalar", lowerNumToTensor});
   rewrites.push_back({"torch.aten.div.Tensor_mode", lowerDivMode});

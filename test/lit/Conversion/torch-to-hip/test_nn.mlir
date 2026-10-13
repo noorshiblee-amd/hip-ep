@@ -57,4 +57,21 @@ module {
     %result = torch.aten.add.Tensor %scaledLogits, %scaledBias, %int1 : !torch.vtensor<[1,1],f32>, !torch.vtensor<[1,1],f32>, !torch.int -> !torch.vtensor<[1,1],f32>
     return %result : !torch.vtensor<[1,1],f32>
   }
+
+  func.func @conv_transpose(%x: !torch.vtensor<[1,4,8,8],f32>, %w: !torch.vtensor<[4,2,2,2],f32>, %b: !torch.vtensor<[2],f32>) -> !torch.vtensor<[1,2,16,16],f32> {
+    // CHECK-LABEL: func.func @conv_transpose
+    %int0 = torch.constant.int 0
+    %int1 = torch.constant.int 1
+    %int2 = torch.constant.int 2
+    %true = torch.constant.bool true
+    %strides = torch.prim.ListConstruct %int2, %int2 : (!torch.int, !torch.int) -> !torch.list<int>
+    %zeros = torch.prim.ListConstruct %int0, %int0 : (!torch.int, !torch.int) -> !torch.list<int>
+    %ones = torch.prim.ListConstruct %int1, %int1 : (!torch.int, !torch.int) -> !torch.list<int>
+    %y = torch.aten.convolution %x, %w, %b, %strides, %zeros, %ones, %true, %zeros, %int1 : !torch.vtensor<[1,4,8,8],f32>, !torch.vtensor<[4,2,2,2],f32>, !torch.vtensor<[2],f32>, !torch.list<int>, !torch.list<int>, !torch.list<int>, !torch.bool, !torch.list<int>, !torch.int -> !torch.vtensor<[1,2,16,16],f32>
+    // CHECK: hip.conv_transpose
+    // CHECK-SAME: output_padding = [0, 0]
+    // CHECK-SAME: strides = [2, 2]
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,16,16],f32>
+  }
 }

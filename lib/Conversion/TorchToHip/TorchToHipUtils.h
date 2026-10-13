@@ -44,6 +44,11 @@ FailureOr<Value> castToElementType(OpBuilder &builder, Location loc,
 FailureOr<Value> materializeScalarTensor(OpBuilder &builder, Location loc,
                                          Value scalar, Type elementType);
 
+/// Prepends size-1 dimensions to a static, non-scalar tensor until it has
+/// `targetRank` dimensions.
+FailureOr<Value> rightAlignTensor(OpBuilder &builder, Location loc, Value value,
+                                  int64_t targetRank);
+
 /// True when `value` is an arith.constant integer 1 or float 1.0.
 bool isUnitScalar(Value value);
 

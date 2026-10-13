@@ -280,4 +280,36 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[2,2],f32>
   }
+
+  func.func @copy(%self: !torch.vtensor<[1,2],f32>, %src: !torch.vtensor<[1,2],f32>) -> !torch.vtensor<[1,2],f32> {
+    // CHECK-LABEL: func.func @copy
+    // CHECK-SAME: %[[SRC:[a-z0-9]+]]: tensor<1x2xf32>) -> tensor<1x2xf32>
+    %false = torch.constant.bool false
+    %y = torch.aten.copy %self, %src, %false : !torch.vtensor<[1,2],f32>, !torch.vtensor<[1,2],f32>, !torch.bool -> !torch.vtensor<[1,2],f32>
+    // CHECK: return %[[SRC]]
+    return %y : !torch.vtensor<[1,2],f32>
+  }
+
+  func.func @cat_mixed(%a: !torch.vtensor<[1,1],si32>, %b: !torch.vtensor<[1,1],f32>) -> !torch.vtensor<[1,2],f32> {
+    // CHECK-LABEL: func.func @cat_mixed
+    %list = torch.prim.ListConstruct %a, %b : (!torch.vtensor<[1,1],si32>, !torch.vtensor<[1,1],f32>) -> !torch.list<vtensor>
+    %dim = torch.constant.int 1
+    %c = torch.aten.cat %list, %dim : !torch.list<vtensor>, !torch.int -> !torch.vtensor<[1,2],f32>
+    // CHECK: hip.cast
+    // CHECK: tensor.concat
+    // CHECK-NOT: torch.
+    return %c : !torch.vtensor<[1,2],f32>
+  }
+
+  func.func @repeat_rank(%x: !torch.vtensor<[5,4],f32>) -> !torch.vtensor<[1,2,5,4],f32> {
+    // CHECK-LABEL: func.func @repeat_rank
+    %int1 = torch.constant.int 1
+    %int2 = torch.constant.int 2
+    %reps = torch.prim.ListConstruct %int1, %int2, %int1, %int1 : (!torch.int, !torch.int, !torch.int, !torch.int) -> !torch.list<int>
+    %y = torch.aten.repeat %x, %reps : !torch.vtensor<[5,4],f32>, !torch.list<int> -> !torch.vtensor<[1,2,5,4],f32>
+    // CHECK: tensor.expand_shape {{.*}} into tensor<1x1x5x4xf32>
+    // CHECK: hip.tile
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,5,4],f32>
+  }
 }
