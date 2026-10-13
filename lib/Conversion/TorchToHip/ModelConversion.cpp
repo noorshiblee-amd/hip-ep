@@ -1742,6 +1742,31 @@ LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// aten.minimum is an elementwise min. Both operands keep the result type.
+// Before: minimum(%a, %b) on tensor<16x16xsi64>
+// After:  hip.min(%a, %b)
+LogicalResult lowerMinimum(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto selfType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto otherType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  if (!selfType || !otherType ||
+      selfType.getElementType() != resultType->getElementType() ||
+      otherType.getElementType() != resultType->getElementType()) {
+    return op->emitError(
+        "aten.minimum operands must match the result element type");
+  }
+  FailureOr<Value> result = hip::emitElementwise(
+      builder, op->getLoc(), context, op->getOperand(0), op->getOperand(1),
+      *resultType, hip::ElementwiseKind::Min);
+  if (failed(result))
+    return op->emitError("aten.minimum failed");
+  op->getResult(0).replaceAllUsesWith(*result);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerGtTensor(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -2340,6 +2365,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.le.Scalar", lowerLeScalar});
   rewrites.push_back({"torch.aten.gather", lowerGather});
   rewrites.push_back({"torch.aten.gt.Tensor", lowerGtTensor});
+  rewrites.push_back({"torch.aten.minimum", lowerMinimum});
   rewrites.push_back({"torch.aten.max.dim", lowerMaxDim});
   rewrites.push_back({"torch.aten.topk", lowerTopk});
   rewrites.push_back({"torch.prim.ListUnpack", lowerListUnpack});

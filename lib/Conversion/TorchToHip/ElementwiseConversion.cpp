@@ -211,8 +211,8 @@ bool isIntegerTensorResult(Operation *op) {
 
 LogicalResult lowerAtenAdd(Operation *op, OpBuilder &builder, Value context) {
   bool scalarOther = op->getName().getStringRef() == "torch.aten.add.Scalar";
-  if (isIntegerTensorResult(op) && scalarOther)
-    return lowerIntegerAlphaBinary(op, builder, context, /*scalarOther=*/true,
+  if (isIntegerTensorResult(op))
+    return lowerIntegerAlphaBinary(op, builder, context, scalarOther,
                                    hip::ElementwiseKind::Add, "aten.add");
   return lowerAlphaBinary(op, builder, context, scalarOther,
                           hip::ElementwiseKind::Add, "aten.add");
@@ -355,8 +355,41 @@ LogicalResult lowerAtenDivTensor(Operation *op, OpBuilder &builder,
 
 LogicalResult lowerAtenMulScalar(Operation *op, OpBuilder &builder,
                                  Value context) {
-  return lowerScalarBinary(op, builder, context, hip::ElementwiseKind::Mul,
-                           "aten.mul");
+  if (!isIntegerTensorResult(op)) {
+    return lowerScalarBinary(op, builder, context, hip::ElementwiseKind::Mul,
+                             "aten.mul");
+  }
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto elementType = inputType
+                         ? dyn_cast<IntegerType>(inputType.getElementType())
+                         : IntegerType();
+  if (!valueTensor || !inputType || !inputType.hasStaticShape() ||
+      !elementType || !supportedIntegerWidth(elementType.getWidth()) ||
+      llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
+    return op->emitError(
+        "integer aten.mul.Scalar requires a static i16, i32, or i64 tensor");
+  }
+  FailureOr<int64_t> other = readI64Scalar(op->getOperand(1));
+  if (failed(other))
+    return op->emitError("integer aten.mul.Scalar other must be a constant");
+  if (failed(integerScalarFits(op, *other, elementType.getWidth())))
+    return failure();
+  Location loc = op->getLoc();
+  Value scalar = arith::ConstantOp::create(
+      builder, loc, IntegerAttr::get(elementType, *other));
+  auto scalarType = RankedTensorType::get({}, elementType);
+  Value rhs = tensor::SplatOp::create(builder, loc, scalarType, scalar);
+  auto resultType = RankedTensorType::get(valueTensor.getSizes(), elementType);
+  FailureOr<Value> result =
+      hip::emitElementwise(builder, loc, context, op->getOperand(0), rhs,
+                           resultType, hip::ElementwiseKind::Mul);
+  if (failed(result))
+    return op->emitError("integer aten.mul.Scalar failed");
+  op->getResult(0).replaceAllUsesWith(*result);
+  op->erase();
+  return success();
 }
 
 LogicalResult lowerAtenDivScalar(Operation *op, OpBuilder &builder,

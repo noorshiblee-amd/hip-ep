@@ -209,6 +209,14 @@ module {
     return %y : !torch.vtensor<[4],si64>
   }
 
+  func.func @minimum(%a: !torch.vtensor<[16,16],si64>, %b: !torch.vtensor<[16,16],si64>) -> !torch.vtensor<[16,16],si64> {
+    // CHECK-LABEL: func.func @minimum
+    %y = torch.aten.minimum %a, %b : !torch.vtensor<[16,16],si64>, !torch.vtensor<[16,16],si64> -> !torch.vtensor<[16,16],si64>
+    // CHECK: hip.min
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[16,16],si64>
+  }
+
   func.func @log_ceil_sqrt(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @log_ceil_sqrt
     %logged = torch.aten.log %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
@@ -262,6 +270,15 @@ module {
     return %y : !torch.vtensor<[4],si64>
   }
 
+  func.func @add_tensor_i64(%a: !torch.vtensor<[16,16],si64>, %b: !torch.vtensor<[16,16],si64>) -> !torch.vtensor<[16,16],si64> {
+    // CHECK-LABEL: func.func @add_tensor_i64
+    %one = torch.constant.int 1
+    %y = torch.aten.add.Tensor %a, %b, %one : !torch.vtensor<[16,16],si64>, !torch.vtensor<[16,16],si64>, !torch.int -> !torch.vtensor<[16,16],si64>
+    // CHECK: hip.add
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[16,16],si64>
+  }
+
   func.func @add_mul_i32(%x: !torch.vtensor<[1,4],si32>, %mask: !torch.vtensor<[1,4],si32>) -> !torch.vtensor<[1,4],si32> {
     // CHECK-LABEL: func.func @add_mul_i32
     %one = torch.constant.int 1
@@ -279,6 +296,15 @@ module {
     // CHECK: hip.mul
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[4,4],si64>
+  }
+
+  func.func @mul_scalar_i64(%x: !torch.vtensor<[16,16],si64>) -> !torch.vtensor<[16,16],si64> {
+    // CHECK-LABEL: func.func @mul_scalar_i64
+    %sixteen = torch.constant.int 16
+    %y = torch.aten.mul.Scalar %x, %sixteen : !torch.vtensor<[16,16],si64>, !torch.int -> !torch.vtensor<[16,16],si64>
+    // CHECK: hip.mul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[16,16],si64>
   }
 
   func.func @gt_tensor(%a: !torch.vtensor<[1,4],si64>, %b: !torch.vtensor<[4,1],si64>) -> !torch.vtensor<[4,4],i1> {

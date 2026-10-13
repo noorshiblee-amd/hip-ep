@@ -677,6 +677,12 @@ def AtenGtTensorOp : Torch_Op<"aten.gt.Tensor", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenMinimumOp : Torch_Op<"aten.minimum", [Pure]> {
+  let summary = "Elementwise minimum of two tensors";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenMaxDimOp : Torch_Op<"aten.max.dim", [Pure]> {
   let summary = "Maximum value and its index along one axis";
   let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$keepdim);
