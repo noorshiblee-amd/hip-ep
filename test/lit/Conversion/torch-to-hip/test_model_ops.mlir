@@ -31,6 +31,26 @@ module {
     return %c : !torch.vtensor<[5,4],f32>
   }
 
+  func.func @cat_neg(%a: !torch.vtensor<[1,2,3],f32>, %b: !torch.vtensor<[1,4,3],f32>) -> !torch.vtensor<[1,6,3],f32> {
+    // CHECK-LABEL: func.func @cat_neg
+    %list = torch.prim.ListConstruct %a, %b : (!torch.vtensor<[1,2,3],f32>, !torch.vtensor<[1,4,3],f32>) -> !torch.list<vtensor>
+    %dim = torch.constant.int -2
+    %c = torch.aten.cat %list, %dim : !torch.list<vtensor>, !torch.int -> !torch.vtensor<[1,6,3],f32>
+    // CHECK: tensor.concat dim(1)
+    // CHECK-NOT: torch.
+    return %c : !torch.vtensor<[1,6,3],f32>
+  }
+
+  func.func @cat_empty(%empty: !torch.vtensor<[0],f32>, %x: !torch.vtensor<[1,2,3,4],f32>) -> !torch.vtensor<[1,2,3,4],f32> {
+    // CHECK-LABEL: func.func @cat_empty
+    // CHECK-SAME: %[[X:[a-z0-9]+]]: tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xf32>
+    %list = torch.prim.ListConstruct %empty, %x : (!torch.vtensor<[0],f32>, !torch.vtensor<[1,2,3,4],f32>) -> !torch.list<vtensor>
+    %dim = torch.constant.int -2
+    %c = torch.aten.cat %list, %dim : !torch.list<vtensor>, !torch.int -> !torch.vtensor<[1,2,3,4],f32>
+    // CHECK: return %[[X]]
+    return %c : !torch.vtensor<[1,2,3,4],f32>
+  }
+
   func.func @embedding(%w: !torch.vtensor<[8,4],f32>, %ids: !torch.vtensor<[2],si64>) -> !torch.vtensor<[2,4],f32> {
     // CHECK-LABEL: func.func @embedding
     %pad = torch.constant.int -1

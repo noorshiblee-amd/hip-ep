@@ -626,6 +626,10 @@ LogicalResult lowerConvert(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// A zero-element input contributes no values, and its rank may have
+// collapsed. The concat axis is resolved against the result rank.
+// Before: cat([tensor<0xf32>, %x : tensor<1x2x3x4xf32>], dim = -2)
+// After:  %x
 LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value context) {
   Operation *list = op->getOperand(0).getDefiningOp();
   if (!list || list->getName().getStringRef() != "torch.prim.ListConstruct")
@@ -637,19 +641,22 @@ LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value context) {
     return failure();
   if (list->getNumOperands() == 0)
     return op->emitError("aten.cat list is empty");
-  auto inputType = dyn_cast<RankedTensorType>(list->getOperand(0).getType());
   FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
-  if (!inputType || failed(dim))
+  if (failed(dim))
     return op->emitError("aten.cat dim must be a constant");
   int64_t axis = *dim;
-  if (failed(normalizeAxis(axis, inputType.getRank())))
+  if (failed(normalizeAxis(axis, resultType->getRank())))
     return op->emitError("aten.cat dim is out of range");
   // Torch promotes mixed-dtype inputs to the result element type.
   SmallVector<Value> inputs;
   for (Value input : list->getOperands()) {
     auto type = dyn_cast<RankedTensorType>(input.getType());
-    if (!type)
+    if (!type || !type.hasStaticShape())
       return op->emitError("aten.cat inputs must be ranked tensors");
+    if (type.getNumElements() == 0)
+      continue;
+    if (type.getRank() != resultType->getRank())
+      return op->emitError("aten.cat inputs must match the result rank");
     if (type.getElementType() != resultType->getElementType()) {
       FailureOr<Value> casted = hipCast(
           builder, op->getLoc(), context, input,
@@ -659,6 +666,13 @@ LogicalResult lowerCat(Operation *op, OpBuilder &builder, Value context) {
       input = *casted;
     }
     inputs.push_back(input);
+  }
+  if (inputs.empty())
+    return op->emitError("aten.cat list is empty");
+  if (inputs.size() == 1 && inputs[0].getType() == *resultType) {
+    op->getResult(0).replaceAllUsesWith(inputs[0]);
+    op->erase();
+    return success();
   }
   auto concat = tensor::ConcatOp::create(builder, op->getLoc(), axis, inputs);
   if (concat.getResult().getType() != *resultType)
