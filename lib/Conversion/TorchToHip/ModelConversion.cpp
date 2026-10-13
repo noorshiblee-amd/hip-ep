@@ -37,6 +37,16 @@ FailureOr<int64_t> readI64Scalar(Value value) {
   return attr.getInt();
 }
 
+FailureOr<float> readF64Scalar(Value value) {
+  auto constant = value.getDefiningOp<arith::ConstantOp>();
+  if (!constant)
+    return failure();
+  auto attr = dyn_cast<FloatAttr>(constant.getValue());
+  if (!attr || !attr.getType().isF64())
+    return failure();
+  return static_cast<float>(attr.getValue().convertToDouble());
+}
+
 FailureOr<bool> readI1Scalar(Value value) {
   auto constant = value.getDefiningOp<arith::ConstantOp>();
   if (!constant)
@@ -2070,6 +2080,135 @@ LogicalResult lowerScaledDotProduct(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// torch.hipdnn.qmoe operands:
+//   activation [B, S, H], router probabilities [B*S, E],
+//   fc1 packed weights [E, 2I, H/2], fc1 scales [E, 2I, H/block], fc1 bias,
+//   fc2 packed weights [E, H, I/2], fc2 scales [E, H, I/block], fc2 bias,
+//   then the scalars k, activation alpha, activation beta, and swiglu limit.
+// The last dimension of each scale tensor is the reduction length divided by
+// the quantization block. Two packed bytes cover four bits each.
+//
+// Before:
+//   %y = torch.operator "torch.hipdnn.qmoe"(
+//            %x, %probs, %fc1w, %fc1s, %fc1b, %fc2w, %fc2s, %fc2b,
+//            %k, %alpha, %beta, %limit) : ... -> !torch.vtensor<[B,S,H],f32>
+// After:
+//   %y = hip.qmoe(%ctx) ins(%x, %probs, %fc1w, %fc1s, %fc2w, %fc2s : ...)
+//          fc1_bias(%fc1b : ...) fc2_bias(%fc2b : ...)
+//          outs(%empty : tensor<B x S x H x f32>)
+//          {expert_weight_bits = 4, block_size = H / scale_groups,
+//           swiglu_fusion = 1, ...}
+LogicalResult lowerQuantizedMoe(Operation *op, OpBuilder &builder,
+                                Value context) {
+  if (op->getNumOperands() != 12 || op->getNumResults() != 1)
+    return op->emitError("qmoe expects 12 operands and 1 result");
+
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto routerType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  auto fc1WeightType = dyn_cast<RankedTensorType>(op->getOperand(2).getType());
+  auto fc1ScaleType = dyn_cast<RankedTensorType>(op->getOperand(3).getType());
+  auto fc1BiasType = dyn_cast<RankedTensorType>(op->getOperand(4).getType());
+  auto fc2WeightType = dyn_cast<RankedTensorType>(op->getOperand(5).getType());
+  auto fc2ScaleType = dyn_cast<RankedTensorType>(op->getOperand(6).getType());
+  auto fc2BiasType = dyn_cast<RankedTensorType>(op->getOperand(7).getType());
+  if (!inputType || !routerType || !fc1WeightType || !fc1ScaleType ||
+      !fc1BiasType || !fc2WeightType || !fc2ScaleType || !fc2BiasType ||
+      !inputType.hasStaticShape() || !routerType.hasStaticShape() ||
+      !fc1WeightType.hasStaticShape() || !fc1ScaleType.hasStaticShape() ||
+      !fc1BiasType.hasStaticShape() || !fc2WeightType.hasStaticShape() ||
+      !fc2ScaleType.hasStaticShape() || !fc2BiasType.hasStaticShape())
+    return op->emitError("qmoe tensors must have static shapes");
+  if (inputType.getRank() != 3 || routerType.getRank() != 2 ||
+      fc1WeightType.getRank() != 3 || fc1ScaleType.getRank() != 3 ||
+      fc1BiasType.getRank() != 2 || fc2WeightType.getRank() != 3 ||
+      fc2ScaleType.getRank() != 3 || fc2BiasType.getRank() != 2)
+    return op->emitError("qmoe tensor ranks do not match the packed layout");
+
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  if (*resultType != inputType)
+    return op->emitError("qmoe result shape must match the activation");
+
+  int64_t batch = inputType.getDimSize(0);
+  int64_t seq = inputType.getDimSize(1);
+  int64_t hidden = inputType.getDimSize(2);
+  int64_t tokens = batch * seq;
+  int64_t experts = fc1WeightType.getDimSize(0);
+  int64_t fusedInter = fc1WeightType.getDimSize(1);
+  if (hidden <= 0 || experts <= 0 || fusedInter <= 0 || fusedInter % 2 != 0)
+    return op->emitError("qmoe activation and fc1 weight shapes are invalid");
+  int64_t inter = fusedInter / 2;
+  if (routerType.getDimSize(0) != tokens || routerType.getDimSize(1) != experts)
+    return op->emitError("qmoe router probabilities must be [B*S, experts]");
+  if (routerType.getElementType() != inputType.getElementType() ||
+      fc1BiasType.getElementType() != inputType.getElementType() ||
+      fc2BiasType.getElementType() != inputType.getElementType())
+    return op->emitError(
+        "qmoe router and bias element types must match the activation");
+  if (!isa<FloatType>(fc1ScaleType.getElementType()) ||
+      !isa<FloatType>(fc2ScaleType.getElementType()))
+    return op->emitError("qmoe scales must be floating point");
+
+  auto packedBytes = [](RankedTensorType type) -> bool {
+    auto integer = dyn_cast<IntegerType>(type.getElementType());
+    return integer && integer.getWidth() == 8;
+  };
+  if (!packedBytes(fc1WeightType) || !packedBytes(fc2WeightType))
+    return op->emitError("qmoe expert weights must be 8-bit packed values");
+  if (fc1WeightType.getDimSize(2) * 2 != hidden ||
+      fc2WeightType.getDimSize(0) != experts ||
+      fc2WeightType.getDimSize(1) != hidden ||
+      fc2WeightType.getDimSize(2) * 2 != inter)
+    return op->emitError("qmoe packed weight shapes must be 4-bit");
+  if (fc1ScaleType.getDimSize(0) != experts ||
+      fc1ScaleType.getDimSize(1) != fusedInter ||
+      fc2ScaleType.getDimSize(0) != experts ||
+      fc2ScaleType.getDimSize(1) != hidden ||
+      fc1BiasType.getDimSize(0) != experts ||
+      fc1BiasType.getDimSize(1) != fusedInter ||
+      fc2BiasType.getDimSize(0) != experts ||
+      fc2BiasType.getDimSize(1) != hidden)
+    return op->emitError(
+        "qmoe scale and bias shapes must match the expert weights");
+
+  int64_t fc1Groups = fc1ScaleType.getDimSize(2);
+  int64_t fc2Groups = fc2ScaleType.getDimSize(2);
+  if (fc1Groups <= 0 || fc2Groups <= 0 || hidden % fc1Groups != 0 ||
+      inter % fc2Groups != 0)
+    return op->emitError("qmoe scale groups must divide the reduction length");
+  int64_t blockSize = hidden / fc1Groups;
+  if (blockSize != inter / fc2Groups || blockSize <= 0 || (blockSize % 2) != 0)
+    return op->emitError("qmoe block size must be a positive even value");
+
+  FailureOr<int64_t> k = readI64Scalar(op->getOperand(8));
+  FailureOr<float> alpha = readF64Scalar(op->getOperand(9));
+  FailureOr<float> beta = readF64Scalar(op->getOperand(10));
+  FailureOr<float> limit = readF64Scalar(op->getOperand(11));
+  if (failed(k) || failed(alpha) || failed(beta) || failed(limit))
+    return op->emitError("qmoe k, alpha, beta, and limit must be constants");
+  if (*k <= 0 || *k > experts)
+    return op->emitError("qmoe k must be in range of the expert count");
+
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return failure();
+  Value none;
+  auto hipOp = hip::QMoEOp::create(
+      builder, op->getLoc(), context, op->getOperand(0), op->getOperand(1),
+      op->getOperand(2), op->getOperand(3), op->getOperand(5),
+      op->getOperand(6), op->getOperand(4), op->getOperand(7), none, none, none,
+      none, none, none, none, *init, builder.getI64IntegerAttr(4),
+      builder.getI64IntegerAttr(*k), builder.getI64IntegerAttr(blockSize),
+      builder.getI64IntegerAttr(1), builder.getI64IntegerAttr(1),
+      builder.getI64IntegerAttr(0), builder.getF32FloatAttr(*alpha),
+      builder.getF32FloatAttr(*beta), builder.getF32FloatAttr(*limit),
+      builder.getStringAttr("swiglu"));
+  op->getResult(0).replaceAllUsesWith(hipOp->getResult(0));
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerFlashAttention(Operation *op, OpBuilder &builder,
                                   Value context) {
   auto name = op->getAttrOfType<StringAttr>("name");
@@ -2091,6 +2230,14 @@ LogicalResult lowerFlashAttention(Operation *op, OpBuilder &builder,
   return success();
 }
 
+LogicalResult lowerTorchOperator(Operation *op, OpBuilder &builder,
+                                 Value context) {
+  auto name = op->getAttrOfType<StringAttr>("name");
+  if (name && name.getValue() == "torch.hipdnn.qmoe")
+    return lowerQuantizedMoe(op, builder, context);
+  return lowerFlashAttention(op, builder, context);
+}
+
 } // namespace
 
 void mlir::torch::populateTorchModelRewrites(
@@ -2106,7 +2253,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten._softmax", lowerSoftmax});
   rewrites.push_back(
       {"torch.aten.scaled_dot_product_attention", lowerScaledDotProduct});
-  rewrites.push_back({"torch.operator", lowerFlashAttention});
+  rewrites.push_back({"torch.operator", lowerTorchOperator});
   rewrites.push_back({"torch.aten.eq.Scalar", lowerEqScalar});
   rewrites.push_back({"torch.aten.all.dim", lowerAllDim});
   rewrites.push_back({"torch.aten._assert_tensor_metadata", lowerAssert});

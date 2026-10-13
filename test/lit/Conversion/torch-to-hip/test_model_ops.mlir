@@ -359,4 +359,17 @@ module {
     // CHECK-NOT: torch.
     return %y#0 : !torch.vtensor<[1,2,2,8],f32>
   }
+
+  func.func @qmoe(%x: !torch.vtensor<[1,2,8],f32>, %probs: !torch.vtensor<[2,2],f32>, %fc1w: !torch.vtensor<[2,8,4],ui8>, %fc1s: !torch.vtensor<[2,8,2],f16>, %fc1b: !torch.vtensor<[2,8],f32>, %fc2w: !torch.vtensor<[2,8,2],ui8>, %fc2s: !torch.vtensor<[2,8,1],f16>, %fc2b: !torch.vtensor<[2,8],f32>) -> !torch.vtensor<[1,2,8],f32> {
+    // CHECK-LABEL: func.func @qmoe
+    %k = torch.constant.int 1
+    %alpha = torch.constant.float 1.702000e+00
+    %beta = torch.constant.float 1.000000e+00
+    %limit = torch.constant.float 7.000000e+00
+    %y = torch.operator "torch.hipdnn.qmoe"(%x, %probs, %fc1w, %fc1s, %fc1b, %fc2w, %fc2s, %fc2b, %k, %alpha, %beta, %limit) : (!torch.vtensor<[1,2,8],f32>, !torch.vtensor<[2,2],f32>, !torch.vtensor<[2,8,4],ui8>, !torch.vtensor<[2,8,2],f16>, !torch.vtensor<[2,8],f32>, !torch.vtensor<[2,8,2],ui8>, !torch.vtensor<[2,8,1],f16>, !torch.vtensor<[2,8],f32>, !torch.int, !torch.float, !torch.float, !torch.float) -> !torch.vtensor<[1,2,8],f32>
+    // CHECK: hip.qmoe
+    // CHECK-SAME: activation_type = "swiglu"{{.*}}block_size = 4{{.*}}expert_weight_bits = 4{{.*}}k = 1{{.*}}swiglu_fusion = 1
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,8],f32>
+  }
 }
