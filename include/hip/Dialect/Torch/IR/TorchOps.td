@@ -470,6 +470,12 @@ def AtenSigmoidOp : Torch_Op<"aten.sigmoid", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenTanhOp : Torch_Op<"aten.tanh", [Pure]> {
+  let summary = "Elementwise hyperbolic tangent";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenGeluOp : Torch_Op<"aten.gelu", [Pure]> {
   let summary = "GELU activation";
   let arguments = (ins ValueTensorType:$self, AnyType:$approximate);

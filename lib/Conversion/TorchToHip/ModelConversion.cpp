@@ -689,6 +689,10 @@ LogicalResult lowerSigmoid(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTensor<hip::SigmoidOp>(op, builder, context, "aten.sigmoid");
 }
 
+LogicalResult lowerTanh(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTensor<hip::TanhOp>(op, builder, context, "aten.tanh");
+}
+
 LogicalResult lowerGelu(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -1486,6 +1490,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.pow.Scalar", lowerPow});
   rewrites.push_back({"torch.aten.repeat", lowerRepeat});
   rewrites.push_back({"torch.aten.sigmoid", lowerSigmoid});
+  rewrites.push_back({"torch.aten.tanh", lowerTanh});
   rewrites.push_back({"torch.aten.gelu", lowerGelu});
   rewrites.push_back({"torch.aten.embedding", lowerEmbedding});
   rewrites.push_back({"torch.aten.alias", lowerAlias});

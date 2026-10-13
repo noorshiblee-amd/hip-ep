@@ -13,6 +13,14 @@ module {
     return %y : !torch.vtensor<[4],f32>
   }
 
+  func.func @tanh(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @tanh
+    %y = torch.aten.tanh %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.tanh
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
   func.func @cat(%a: !torch.vtensor<[2,4],f32>, %b: !torch.vtensor<[3,4],f32>) -> !torch.vtensor<[5,4],f32> {
     // CHECK-LABEL: func.func @cat
     %list = torch.prim.ListConstruct %a, %b : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[3,4],f32>) -> !torch.list<vtensor>
