@@ -1643,8 +1643,29 @@ bool isOrdTwo(Value value) {
   return false;
 }
 
+// A dtype code is accepted when it names the result element type. Torch's
+// float32 code is 6, float16 is 5, and bfloat16 is 15.
+bool vectorNormDtypeMatches(Value dtype, Type element) {
+  if (isa<torch::TorchNoneType>(dtype.getType()))
+    return true;
+  auto constant = dtype.getDefiningOp<arith::ConstantOp>();
+  if (!constant)
+    return false;
+  auto attr = dyn_cast<IntegerAttr>(constant.getValue());
+  if (!attr)
+    return false;
+  int64_t code = attr.getInt();
+  if (element.isF32())
+    return code == 6;
+  if (element.isF16())
+    return code == 5;
+  if (element.isBF16())
+    return code == 15;
+  return false;
+}
+
 // ord 2 is sqrt(sum(x * x)). A missing dim list reduces every axis.
-// Before: linalg_vector_norm %x, 2, [-1], keepdim = true
+// Before: linalg_vector_norm %x, 2, [-1], keepdim = true, dtype = float32
 // After:  hip.mul, hip.reduce_sum {keepdims = 1}, hip.sqrt
 LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
                               Value context) {
@@ -1653,8 +1674,9 @@ LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
     return failure();
   if (!isOrdTwo(op->getOperand(1)))
     return op->emitError("aten.linalg_vector_norm only lowers ord 2");
-  if (!isa<torch::TorchNoneType>(op->getOperand(4).getType()))
-    return op->emitError("aten.linalg_vector_norm dtype must be none");
+  if (!vectorNormDtypeMatches(op->getOperand(4), resultType->getElementType()))
+    return op->emitError("aten.linalg_vector_norm dtype must be none or the "
+                         "result element type");
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   FailureOr<bool> keepdim = readI1Scalar(op->getOperand(3));
   if (!inputType || !inputType.hasStaticShape() || failed(keepdim))
