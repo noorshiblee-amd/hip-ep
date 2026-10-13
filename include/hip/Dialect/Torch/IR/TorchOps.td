@@ -299,6 +299,22 @@ def AtenCopyOp : Torch_Op<"aten.copy", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenScaledDotProductAttentionOp
+    : Torch_Op<"aten.scaled_dot_product_attention", [Pure]> {
+  let summary = "Fused scaled dot-product attention";
+  let arguments = (ins
+    ValueTensorType:$query,
+    ValueTensorType:$key,
+    ValueTensorType:$value,
+    AnyType:$attn_mask,
+    TorchFloatType:$dropout_p,
+    TorchBoolType:$is_causal,
+    AnyType:$scale,
+    TorchBoolType:$enable_gqa
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenSoftmaxOp : Torch_Op<"aten._softmax", [Pure]> {
   let summary = "Softmax over one dimension";
   let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$half_to_float);

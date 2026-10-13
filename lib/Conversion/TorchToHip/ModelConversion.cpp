@@ -19,6 +19,9 @@
 #include "llvm/ADT/Sequence.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <optional>
 
 using namespace mlir;
 
@@ -1015,21 +1018,47 @@ LogicalResult lowerPowTensorScalar(Operation *op, OpBuilder &builder,
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
     return failure();
-  FailureOr<int64_t> exponent = readI64Scalar(op->getOperand(1));
-  if (failed(exponent))
-    return op->emitError("aten.pow.Tensor_Scalar exponent must be constant");
+  // A float exponent that is an integer, such as 3.0, uses the same multiply
+  // path. log/exp would be undefined for a negative base.
+  std::optional<int64_t> exponent;
+  if (FailureOr<int64_t> asInt = readI64Scalar(op->getOperand(1));
+      succeeded(asInt)) {
+    exponent = *asInt;
+  } else if (auto constant =
+                 op->getOperand(1).getDefiningOp<arith::ConstantOp>()) {
+    if (auto floating = dyn_cast<FloatAttr>(constant.getValue())) {
+      double value = floating.getValue().convertToDouble();
+      if (std::isfinite(value) && value == std::trunc(value))
+        exponent = static_cast<int64_t>(value);
+    }
+  }
   Location loc = op->getLoc();
   Value input = op->getOperand(0);
-  if (*exponent == 2) {
-    FailureOr<Value> squared =
-        hip::emitElementwise(builder, loc, context, input, input, *resultType,
-                             hip::ElementwiseKind::Mul);
-    if (failed(squared))
-      return op->emitError("aten.pow.Tensor_Scalar square failed");
-    op->getResult(0).replaceAllUsesWith(*squared);
+  if (exponent && *exponent >= 0 && *exponent <= 16) {
+    if (*exponent == 0) {
+      Value one = arith::ConstantOp::create(
+          builder, loc,
+          builder.getFloatAttr(resultType->getElementType(), 1.0));
+      op->getResult(0).replaceAllUsesWith(
+          tensor::SplatOp::create(builder, loc, *resultType, one));
+      op->erase();
+      return success();
+    }
+    Value current = input;
+    for (int64_t i = 1; i < *exponent; ++i) {
+      FailureOr<Value> product =
+          hip::emitElementwise(builder, loc, context, current, input,
+                               *resultType, hip::ElementwiseKind::Mul);
+      if (failed(product))
+        return op->emitError("aten.pow.Tensor_Scalar product failed");
+      current = *product;
+    }
+    op->getResult(0).replaceAllUsesWith(current);
     op->erase();
     return success();
   }
+  if (!op->getOperand(1).getDefiningOp<arith::ConstantOp>())
+    return op->emitError("aten.pow.Tensor_Scalar exponent must be constant");
   FailureOr<Value> logged =
       unaryHip<hip::LogOp>(builder, loc, context, input, *resultType);
   if (failed(logged))
@@ -1819,6 +1848,249 @@ LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// [B, H, S, D] -> [B, S, H*D]. hip.gqa consumes the packed layout.
+FailureOr<Value> packAttentionHeads(OpBuilder &builder, Location loc,
+                                    Value context, Value input) {
+  auto type = dyn_cast<RankedTensorType>(input.getType());
+  if (!type || type.getRank() != 4 || !type.hasStaticShape())
+    return failure();
+  int64_t batch = type.getDimSize(0);
+  int64_t heads = type.getDimSize(1);
+  int64_t seq = type.getDimSize(2);
+  int64_t dim = type.getDimSize(3);
+  auto transposedType =
+      RankedTensorType::get({batch, seq, heads, dim}, type.getElementType());
+  FailureOr<Value> transposed =
+      transposeTo(builder, loc, context, input, {0, 2, 1, 3}, transposedType);
+  if (failed(transposed))
+    return failure();
+  auto packedType =
+      RankedTensorType::get({batch, seq, heads * dim}, type.getElementType());
+  SmallVector<ReassociationIndices> reassociation = {{0}, {1}, {2, 3}};
+  return Value(tensor::CollapseShapeOp::create(builder, loc, packedType,
+                                               *transposed, reassociation));
+}
+
+// [B, S, H*D] -> [B, H, S, D].
+FailureOr<Value> unpackAttentionHeads(OpBuilder &builder, Location loc,
+                                      Value context, Value packed,
+                                      int64_t heads) {
+  auto type = dyn_cast<RankedTensorType>(packed.getType());
+  if (!type || type.getRank() != 3 || !type.hasStaticShape() || heads < 1 ||
+      type.getDimSize(2) % heads != 0)
+    return failure();
+  int64_t batch = type.getDimSize(0);
+  int64_t seq = type.getDimSize(1);
+  int64_t dim = type.getDimSize(2) / heads;
+  auto expandedType =
+      RankedTensorType::get({batch, seq, heads, dim}, type.getElementType());
+  SmallVector<ReassociationIndices> reassociation = {{0}, {1}, {2, 3}};
+  SmallVector<OpFoldResult> outputShape = {
+      builder.getIndexAttr(batch), builder.getIndexAttr(seq),
+      builder.getIndexAttr(heads), builder.getIndexAttr(dim)};
+  Value expanded =
+      tensor::ExpandShapeOp::create(builder, loc, expandedType, packed,
+                                    reassociation, outputShape)
+          .getResult();
+  auto resultType =
+      RankedTensorType::get({batch, heads, seq, dim}, type.getElementType());
+  return transposeTo(builder, loc, context, expanded, {0, 2, 1, 3}, resultType);
+}
+
+// Scaled dot-product attention, including its flash-attention kernel form and
+// grouped-query attention (fewer key/value heads than query heads).
+// Before: sdpa(q[1,4,2,8], k[1,2,2,8], v[1,2,2,8], enable_gqa = true)
+// After:  hip.gqa {num_heads = 4, kv_num_heads = 2}
+LogicalResult emitFusedAttention(Operation *op, OpBuilder &builder,
+                                 Value context, Value query, Value key,
+                                 Value value, Value attnMask, Value dropout,
+                                 Value isCausal, Value scale, Value enableGqa,
+                                 unsigned outputIndex) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, outputIndex);
+  if (failed(resultType))
+    return failure();
+  auto queryType = dyn_cast<RankedTensorType>(query.getType());
+  auto keyType = dyn_cast<RankedTensorType>(key.getType());
+  auto valueType = dyn_cast<RankedTensorType>(value.getType());
+  if (!queryType || !keyType || !valueType || !queryType.hasStaticShape() ||
+      !keyType.hasStaticShape() || !valueType.hasStaticShape() ||
+      queryType.getRank() != 4 || keyType.getRank() != 4 ||
+      valueType.getRank() != 4 ||
+      queryType.getElementType() != keyType.getElementType() ||
+      queryType.getElementType() != valueType.getElementType()) {
+    return op->emitError(
+        "attention requires static rank-4 query, key, and value");
+  }
+  int64_t batch = queryType.getDimSize(0);
+  int64_t queryHeads = queryType.getDimSize(1);
+  int64_t querySeq = queryType.getDimSize(2);
+  int64_t headDim = queryType.getDimSize(3);
+  int64_t kvHeads = keyType.getDimSize(1);
+  int64_t kvSeq = keyType.getDimSize(2);
+  if (queryHeads < 1 || kvHeads < 1 || queryHeads % kvHeads != 0 ||
+      keyType.getDimSize(0) != batch || valueType.getDimSize(0) != batch ||
+      valueType.getDimSize(1) != kvHeads || valueType.getDimSize(2) != kvSeq ||
+      keyType.getDimSize(3) != headDim || valueType.getDimSize(3) != headDim ||
+      resultType->getShape() != queryType.getShape()) {
+    return op->emitError("attention head layout does not match the result");
+  }
+  auto dropoutConstant = dropout.getDefiningOp<arith::ConstantOp>();
+  auto dropoutAttr = dropoutConstant
+                         ? dyn_cast<FloatAttr>(dropoutConstant.getValue())
+                         : FloatAttr();
+  if (!dropoutAttr || !dropoutAttr.getValue().isExactlyValue(0.0))
+    return op->emitError("attention dropout must be 0");
+  FailureOr<bool> causal = readI1Scalar(isCausal);
+  FailureOr<bool> grouped = readI1Scalar(enableGqa);
+  if (failed(causal) || failed(grouped))
+    return op->emitError("attention is_causal and enable_gqa must be constant");
+  if (*grouped == false && queryHeads != kvHeads)
+    return op->emitError("grouped-query attention requires enable_gqa");
+  bool hasMask = !isa<torch::TorchNoneType>(attnMask.getType());
+  if (hasMask && *causal)
+    return op->emitError("attention cannot combine is_causal with a mask");
+  // A bool mask keeps True positions. False positions become -inf, matching
+  // the scaled-dot-product rule, so hip.gqa can add the bias to the scores.
+  if (hasMask) {
+    auto maskType = dyn_cast<RankedTensorType>(attnMask.getType());
+    if (!maskType)
+      return op->emitError("attention mask must be a ranked tensor or none");
+    Type element = queryType.getElementType();
+    if (maskType.getElementType().isInteger(1)) {
+      auto biasType = RankedTensorType::get(maskType.getShape(), element);
+      Value keepScalar = arith::ConstantOp::create(
+          builder, op->getLoc(), builder.getFloatAttr(element, 0.0));
+      Value blockScalar = arith::ConstantOp::create(
+          builder, op->getLoc(),
+          builder.getFloatAttr(element,
+                               -std::numeric_limits<double>::infinity()));
+      Value keep =
+          tensor::SplatOp::create(builder, op->getLoc(), biasType, keepScalar);
+      Value block =
+          tensor::SplatOp::create(builder, op->getLoc(), biasType, blockScalar);
+      FailureOr<Value> biasInit = emptyStatic(builder, op->getLoc(), biasType);
+      if (failed(biasInit))
+        return failure();
+      attnMask = hip::WhereOp::create(builder, op->getLoc(), context, attnMask,
+                                      keep, block, *biasInit)
+                     ->getResult(0);
+    } else if (maskType.getElementType() != element) {
+      return op->emitError(
+          "attention mask element type must match the query or be i1");
+    }
+  }
+  float scaleValue = 0.f;
+  if (!isa<torch::TorchNoneType>(scale.getType())) {
+    auto scaleConstant = scale.getDefiningOp<arith::ConstantOp>();
+    auto scaleAttr = scaleConstant
+                         ? dyn_cast<FloatAttr>(scaleConstant.getValue())
+                         : FloatAttr();
+    if (!scaleAttr)
+      return op->emitError("attention scale must be a constant or none");
+    scaleValue = static_cast<float>(scaleAttr.getValue().convertToDouble());
+  }
+
+  Location loc = op->getLoc();
+  FailureOr<Value> packedQuery =
+      packAttentionHeads(builder, loc, context, query);
+  FailureOr<Value> packedKey = packAttentionHeads(builder, loc, context, key);
+  FailureOr<Value> packedValue =
+      packAttentionHeads(builder, loc, context, value);
+  if (failed(packedQuery) || failed(packedKey) || failed(packedValue))
+    return op->emitError("attention cannot pack heads");
+
+  auto seqLenType = RankedTensorType::get({batch}, builder.getI32Type());
+  Value seqLens = arith::ConstantOp::create(
+      builder, loc,
+      DenseElementsAttr::get(seqLenType, builder.getI32IntegerAttr(kvSeq)));
+  auto totalType = RankedTensorType::get({}, builder.getI32Type());
+  Value totalSeq = arith::ConstantOp::create(
+      builder, loc,
+      DenseElementsAttr::get(totalType, builder.getI32IntegerAttr(kvSeq)));
+
+  auto outputType = RankedTensorType::get(
+      {batch, querySeq, queryHeads * headDim}, queryType.getElementType());
+  FailureOr<Value> outputInit = emptyStatic(builder, loc, outputType);
+  FailureOr<Value> presentKey = emptyStatic(builder, loc, keyType);
+  FailureOr<Value> presentValue = emptyStatic(builder, loc, valueType);
+  if (failed(outputInit) || failed(presentKey) || failed(presentValue))
+    return failure();
+
+  SmallVector<Value> operands = {context,      *packedQuery, *packedKey,
+                                 *packedValue, seqLens,      totalSeq};
+  if (hasMask)
+    operands.push_back(attnMask);
+  operands.push_back(*outputInit);
+  operands.push_back(*presentKey);
+  operands.push_back(*presentValue);
+
+  SmallVector<NamedAttribute> attrs = {
+      builder.getNamedAttr("num_heads", builder.getI64IntegerAttr(queryHeads)),
+      builder.getNamedAttr("kv_num_heads", builder.getI64IntegerAttr(kvHeads)),
+      builder.getNamedAttr("scale", builder.getF32FloatAttr(scaleValue)),
+      builder.getNamedAttr("do_rotary", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("rotary_interleaved", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("softcap", builder.getF32FloatAttr(0.f)),
+      builder.getNamedAttr("local_window_size", builder.getI64IntegerAttr(-1)),
+      builder.getNamedAttr("smooth_softmax", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("qk_output", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("k_quant_type", builder.getStringAttr("NONE")),
+      builder.getNamedAttr("v_quant_type", builder.getStringAttr("NONE")),
+      builder.getNamedAttr("kv_cache_bit_width", builder.getI64IntegerAttr(8)),
+      builder.getNamedAttr("no_causal", builder.getBoolAttr(!*causal))};
+  SmallVector<int32_t> segments = {
+      1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, hasMask ? 1 : 0, 0, 0, 0, 1, 1, 1, 0};
+
+  OperationState state(loc, "hip.gqa");
+  state.addOperands(operands);
+  state.addAttributes(attrs);
+  state.addTypes({outputType, keyType, valueType});
+  state.addAttribute("operand_segment_sizes",
+                     builder.getDenseI32ArrayAttr(segments));
+  Value packed = builder.create(state)->getResult(0);
+  FailureOr<Value> unpacked =
+      unpackAttentionHeads(builder, loc, context, packed, queryHeads);
+  if (failed(unpacked))
+    return op->emitError("attention cannot unpack heads");
+  op->getResult(outputIndex).replaceAllUsesWith(*unpacked);
+  return success();
+}
+
+LogicalResult lowerScaledDotProduct(Operation *op, OpBuilder &builder,
+                                    Value context) {
+  if (op->getNumOperands() != 8)
+    return op->emitError(
+        "aten.scaled_dot_product_attention expects 8 operands");
+  if (failed(emitFusedAttention(
+          op, builder, context, op->getOperand(0), op->getOperand(1),
+          op->getOperand(2), op->getOperand(3), op->getOperand(4),
+          op->getOperand(5), op->getOperand(6), op->getOperand(7), 0)))
+    return failure();
+  op->erase();
+  return success();
+}
+
+LogicalResult lowerFlashAttention(Operation *op, OpBuilder &builder,
+                                  Value context) {
+  auto name = op->getAttrOfType<StringAttr>("name");
+  if (!name || !name.getValue().contains("scaled_dot_product_flash_attention"))
+    return op->emitError("unsupported torch.operator");
+  if (op->getNumOperands() != 7 || op->getNumResults() != 2)
+    return op->emitError("flash attention expects 7 operands and 2 results");
+  if (!op->getResult(1).use_empty())
+    return op->emitError("flash attention logsumexp is not lowered");
+  // The kernel has no enable_gqa flag; head counts come from the tensors.
+  Value grouped = arith::ConstantOp::create(builder, op->getLoc(),
+                                            builder.getBoolAttr(true));
+  if (failed(emitFusedAttention(
+          op, builder, context, op->getOperand(0), op->getOperand(1),
+          op->getOperand(2), op->getOperand(5), op->getOperand(3),
+          op->getOperand(4), op->getOperand(6), grouped, 0)))
+    return failure();
+  op->erase();
+  return success();
+}
+
 } // namespace
 
 void mlir::torch::populateTorchModelRewrites(
@@ -1832,6 +2104,9 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.clone", lowerClone});
   rewrites.push_back({"torch.aten.copy", lowerCopy});
   rewrites.push_back({"torch.aten._softmax", lowerSoftmax});
+  rewrites.push_back(
+      {"torch.aten.scaled_dot_product_attention", lowerScaledDotProduct});
+  rewrites.push_back({"torch.operator", lowerFlashAttention});
   rewrites.push_back({"torch.aten.eq.Scalar", lowerEqScalar});
   rewrites.push_back({"torch.aten.all.dim", lowerAllDim});
   rewrites.push_back({"torch.aten._assert_tensor_metadata", lowerAssert});

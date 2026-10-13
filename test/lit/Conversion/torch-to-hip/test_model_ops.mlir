@@ -323,4 +323,40 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[3,2],f32>
   }
+
+  func.func @pow_float_cube(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @pow_float_cube
+    %three = torch.constant.float 3.000000e+00
+    %y = torch.aten.pow.Tensor_Scalar %x, %three : !torch.vtensor<[4],f32>, !torch.float -> !torch.vtensor<[4],f32>
+    // CHECK: hip.mul
+    // CHECK: hip.mul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @sdpa_gqa(%q: !torch.vtensor<[1,4,2,8],f32>, %k: !torch.vtensor<[1,2,2,8],f32>, %v: !torch.vtensor<[1,2,2,8],f32>) -> !torch.vtensor<[1,4,2,8],f32> {
+    // CHECK-LABEL: func.func @sdpa_gqa
+    %none = torch.constant.none
+    %none_scale = torch.constant.none
+    %drop = torch.constant.float 0.000000e+00
+    %true = torch.constant.bool true
+    %y = torch.aten.scaled_dot_product_attention %q, %k, %v, %none, %drop, %true, %none_scale, %true : !torch.vtensor<[1,4,2,8],f32>, !torch.vtensor<[1,2,2,8],f32>, !torch.vtensor<[1,2,2,8],f32>, !torch.none, !torch.float, !torch.bool, !torch.none, !torch.bool -> !torch.vtensor<[1,4,2,8],f32>
+    // CHECK: hip.gqa
+    // CHECK-SAME: kv_num_heads = 2{{.*}}num_heads = 4
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,2,8],f32>
+  }
+
+  func.func @flash_attention(%q: !torch.vtensor<[1,2,2,8],f32>, %k: !torch.vtensor<[1,2,2,8],f32>, %v: !torch.vtensor<[1,2,2,8],f32>) -> !torch.vtensor<[1,2,2,8],f32> {
+    // CHECK-LABEL: func.func @flash_attention
+    %none = torch.constant.none
+    %none_scale = torch.constant.none
+    %drop = torch.constant.float 0.000000e+00
+    %false = torch.constant.bool false
+    %y:2 = torch.operator "torch.aten._scaled_dot_product_flash_attention_for_cpu"(%q, %k, %v, %drop, %false, %none, %none_scale) : (!torch.vtensor<[1,2,2,8],f32>, !torch.vtensor<[1,2,2,8],f32>, !torch.vtensor<[1,2,2,8],f32>, !torch.float, !torch.bool, !torch.none, !torch.none) -> (!torch.vtensor<[1,2,2,8],f32>, !torch.vtensor<[1,2,2],f32>)
+    // CHECK: hip.gqa
+    // CHECK-SAME: kv_num_heads = 2{{.*}}no_causal = true{{.*}}num_heads = 2
+    // CHECK-NOT: torch.
+    return %y#0 : !torch.vtensor<[1,2,2,8],f32>
+  }
 }
