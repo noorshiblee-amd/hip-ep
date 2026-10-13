@@ -1376,6 +1376,81 @@ LogicalResult lowerSqueeze(Operation *op, OpBuilder &builder,
   return success();
 }
 
+bool isOrdTwo(Value value) {
+  auto constant = value.getDefiningOp<arith::ConstantOp>();
+  if (!constant)
+    return false;
+  if (auto integer = dyn_cast<IntegerAttr>(constant.getValue()))
+    return integer.getValue() == 2;
+  if (auto floating = dyn_cast<FloatAttr>(constant.getValue()))
+    return floating.getValue().isExactlyValue(2.0);
+  return false;
+}
+
+// ord 2 is sqrt(sum(x * x)). A missing dim list reduces every axis.
+// Before: linalg_vector_norm %x, 2, [-1], keepdim = true
+// After:  hip.mul, hip.reduce_sum {keepdims = 1}, hip.sqrt
+LogicalResult lowerVectorNorm(Operation *op, OpBuilder &builder,
+                              Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  if (!isOrdTwo(op->getOperand(1)))
+    return op->emitError("aten.linalg_vector_norm only lowers ord 2");
+  if (!isa<torch::TorchNoneType>(op->getOperand(4).getType()))
+    return op->emitError("aten.linalg_vector_norm dtype must be none");
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<bool> keepdim = readI1Scalar(op->getOperand(3));
+  if (!inputType || !inputType.hasStaticShape() || failed(keepdim))
+    return op->emitError("aten.linalg_vector_norm requires a static input");
+  SmallVector<int64_t> axes;
+  if (isa<torch::TorchNoneType>(op->getOperand(2).getType())) {
+    for (int64_t axis : llvm::seq<int64_t>(0, inputType.getRank()))
+      axes.push_back(axis);
+  } else {
+    FailureOr<SmallVector<int64_t>> dims = readI64List(op->getOperand(2));
+    if (failed(dims))
+      return op->emitError(
+          "aten.linalg_vector_norm dim must be a constant list");
+    for (int64_t axis : *dims) {
+      if (failed(normalizeAxis(axis, inputType.getRank())))
+        return op->emitError("aten.linalg_vector_norm dim is out of range");
+      axes.push_back(axis);
+    }
+  }
+  Location loc = op->getLoc();
+  FailureOr<Value> squared = hip::emitElementwise(
+      builder, loc, context, op->getOperand(0), op->getOperand(0), inputType,
+      hip::ElementwiseKind::Mul);
+  if (failed(squared))
+    return op->emitError("aten.linalg_vector_norm square failed");
+  auto reducedType = RankedTensorType::get(resultType->getShape(),
+                                           inputType.getElementType());
+  FailureOr<Value> sumInit = emptyStatic(builder, loc, reducedType);
+  FailureOr<Value> sqrtInit = emptyStatic(builder, loc, *resultType);
+  if (failed(sumInit) || failed(sqrtInit))
+    return failure();
+  Value summed =
+      hip::ReduceSumOp::create(builder, loc, context, *squared,
+                               i64Vector(builder, loc, axes), *sumInit,
+                               builder.getI64IntegerAttr(*keepdim ? 1 : 0),
+                               builder.getI64IntegerAttr(0))
+          ->getResult(0);
+  if (reducedType.getElementType() != resultType->getElementType()) {
+    FailureOr<Value> casted =
+        hipCast(builder, loc, context, summed, *resultType);
+    if (failed(casted))
+      return op->emitError("aten.linalg_vector_norm cannot cast its sum");
+    summed = *casted;
+  }
+  Value rooted =
+      hip::SqrtOp::create(builder, loc, context, summed, *sqrtInit)
+          ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(rooted);
+  op->erase();
+  return success();
+}
+
 } // namespace
 
 void mlir::torch::populateTorchModelRewrites(
@@ -1423,4 +1498,5 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.clamp", lowerClamp});
   rewrites.push_back({"torch.aten.constant_pad_nd", lowerConstantPad});
   rewrites.push_back({"torch.prims.squeeze", lowerSqueeze});
+  rewrites.push_back({"torch.aten.linalg_vector_norm", lowerVectorNorm});
 }

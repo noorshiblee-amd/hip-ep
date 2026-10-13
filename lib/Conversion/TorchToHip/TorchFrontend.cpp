@@ -70,15 +70,36 @@ FailureOr<Type> mlir::torch::toBuiltinType(Type type) {
 // `dense_resource` blobs are raw element bytes. The textual alignment prefix
 // is stripped by the parser before `getData()`. A handle with no blob is a
 // zero splat: some producers elide the payload and still name the shape.
+static bool samePayloadShape(ShapedType shaped, RankedTensorType resultType) {
+  if (shaped.getShape() != resultType.getShape())
+    return false;
+  Type payload = shaped.getElementType();
+  Type result = resultType.getElementType();
+  if (payload == result)
+    return true;
+  // si64 and i64 name the same bytes. The builtin type is signless.
+  return payload.isIntOrFloat() && result.isIntOrFloat() &&
+         payload.getIntOrFloatBitWidth() == result.getIntOrFloatBitWidth();
+}
+
 static FailureOr<DenseElementsAttr>
 materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
   Attribute attr = literal.getValue();
   if (auto dense = dyn_cast<DenseElementsAttr>(attr)) {
-    if (dense.getType() != resultType) {
+    auto denseType = dyn_cast<RankedTensorType>(dense.getType());
+    if (!denseType || !samePayloadShape(denseType, resultType)) {
       return literal.emitError(
           "torch.vtensor.literal payload type does not match its result type");
     }
-    return dense;
+    if (denseType == resultType)
+      return dense;
+    bool splat = false;
+    if (!DenseElementsAttr::isValidRawBuffer(resultType, dense.getRawData(),
+                                            splat)) {
+      return literal.emitError(
+          "torch.vtensor.literal payload type does not match its result type");
+    }
+    return DenseElementsAttr::getFromRawBuffer(resultType, dense.getRawData());
   }
   auto resource = dyn_cast<DenseResourceElementsAttr>(attr);
   if (!resource) {
@@ -86,7 +107,7 @@ materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
         "torch.vtensor.literal requires a dense elements attribute");
   }
   auto shaped = dyn_cast<ShapedType>(resource.getType());
-  if (!shaped || shaped != resultType) {
+  if (!shaped || !samePayloadShape(shaped, resultType)) {
     return literal.emitError(
         "torch.vtensor.literal payload type does not match its result type");
   }
@@ -94,12 +115,17 @@ materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
   if (data.empty() && resultType.getNumElements() != 0) {
     literal.emitWarning(
         "dense_resource has no payload; lowering a zero tensor");
-    auto floatType = dyn_cast<FloatType>(resultType.getElementType());
-    if (!floatType)
-      return literal.emitError("zero literal requires a float element type");
-    auto zero = FloatAttr::get(floatType,
-                               APFloat::getZero(floatType.getFloatSemantics()));
-    return DenseElementsAttr(SplatElementsAttr::get(resultType, zero));
+    if (auto floatType = dyn_cast<FloatType>(resultType.getElementType())) {
+      auto zero = FloatAttr::get(
+          floatType, APFloat::getZero(floatType.getFloatSemantics()));
+      return DenseElementsAttr(SplatElementsAttr::get(resultType, zero));
+    }
+    if (auto integer = dyn_cast<IntegerType>(resultType.getElementType())) {
+      return DenseElementsAttr(SplatElementsAttr::get(
+          resultType, IntegerAttr::get(integer, 0)));
+    }
+    return literal.emitError(
+        "zero literal requires a float or integer element type");
   }
   bool splat = false;
   if (!DenseElementsAttr::isValidRawBuffer(resultType, data, splat)) {
@@ -111,13 +137,15 @@ materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
 
 static LogicalResult literalTensorType(ValueTensorLiteralOp literal,
                                        RankedTensorType &resultType) {
-  FailureOr<RankedTensorType> converted =
-      toBuiltinTensorType(literal.getType());
-  if (failed(converted)) {
+  FailureOr<Type> converted = toBuiltinType(literal.getType());
+  auto ranked = dyn_cast_or_null<RankedTensorType>(
+      succeeded(converted) ? *converted : Type());
+  if (!ranked) {
     return literal.emitError(
-        "torch.vtensor.literal element type must be f16, f32, or bf16");
+        "torch.vtensor.literal element type must be f16, f32, bf16, or an "
+        "integer");
   }
-  resultType = *converted;
+  resultType = ranked;
   return success();
 }
 

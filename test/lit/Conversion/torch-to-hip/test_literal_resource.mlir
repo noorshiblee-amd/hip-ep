@@ -12,6 +12,22 @@ module {
     %0 = torch.vtensor.literal(dense_resource<blob> : tensor<4xf32>) : !torch.vtensor<[4],f32>
     return %0 : !torch.vtensor<[4],f32>
   }
+
+  func.func @position_ids() -> !torch.vtensor<[2],si64> {
+    // CHECK-LABEL: func.func @position_ids
+    // CHECK: hip.constant
+    // CHECK-SAME: dense<[0, 1]> : tensor<2xi64>
+    %ids = torch.vtensor.literal(dense<[0, 1]> : tensor<2xsi64>) : !torch.vtensor<[2],si64>
+    return %ids : !torch.vtensor<[2],si64>
+  }
+
+  func.func @missing_position_ids() -> !torch.vtensor<[2],si64> {
+    // CHECK-LABEL: func.func @missing_position_ids
+    // CHECK: hip.constant
+    // CHECK-SAME: dense<0> : tensor<2xi64>
+    %missing = torch.vtensor.literal(dense_resource<missing_ids> : tensor<2xsi64>) : !torch.vtensor<[2],si64>
+    return %missing : !torch.vtensor<[2],si64>
+  }
 }
 
 {-#

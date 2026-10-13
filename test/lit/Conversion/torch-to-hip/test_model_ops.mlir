@@ -131,6 +131,21 @@ module {
     return %y : !torch.vtensor<[1,4,8],f32>
   }
 
+  func.func @l2_norm(%x: !torch.vtensor<[1,4],f32>) -> !torch.vtensor<[1,1],f32> {
+    // CHECK-LABEL: func.func @l2_norm
+    %two = torch.constant.int 2
+    %dim = torch.constant.int -1
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %keep = torch.constant.bool true
+    %none = torch.constant.none
+    %y = torch.aten.linalg_vector_norm %x, %two, %dims, %keep, %none : !torch.vtensor<[1,4],f32>, !torch.int, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[1,1],f32>
+    // CHECK: hip.mul
+    // CHECK: hip.reduce_sum
+    // CHECK: hip.sqrt
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,1],f32>
+  }
+
   func.func @squeeze_batch(%x: !torch.vtensor<[1,4,8],f32>) -> !torch.vtensor<[4,8],f32> {
     // CHECK-LABEL: func.func @squeeze_batch
     %dim = torch.constant.int 0

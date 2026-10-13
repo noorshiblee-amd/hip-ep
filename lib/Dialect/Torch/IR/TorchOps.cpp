@@ -124,6 +124,7 @@ TORCH_DEFAULT_FORM(AtenSubScalarOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenClampOp, 3, 1)
 TORCH_DEFAULT_FORM(AtenConstantPadNdOp, 3, 1)
 TORCH_DEFAULT_FORM(PrimsSqueezeOp, 2, 1)
+TORCH_DEFAULT_FORM(AtenLinalgVectorNormOp, 5, 1)
 
 #undef TORCH_DEFAULT_FORM
 

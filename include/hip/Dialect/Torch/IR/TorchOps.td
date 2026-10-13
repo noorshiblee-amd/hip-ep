@@ -559,4 +559,16 @@ def PrimsSqueezeOp : Torch_Op<"prims.squeeze", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenLinalgVectorNormOp : Torch_Op<"aten.linalg_vector_norm", [Pure]> {
+  let summary = "L2 vector norm along a dimension list";
+  let arguments = (ins
+    ValueTensorType:$self,
+    AnyType:$ord,
+    AnyType:$dim,
+    TorchBoolType:$keepdim,
+    AnyType:$dtype
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
 #endif // TORCH_OPS
