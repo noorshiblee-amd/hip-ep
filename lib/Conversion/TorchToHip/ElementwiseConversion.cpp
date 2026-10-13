@@ -121,15 +121,33 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   return success();
 }
 
+bool supportedIntegerWidth(unsigned width) {
+  return width == 16 || width == 32 || width == 64;
+}
+
+LogicalResult integerScalarFits(Operation *op, int64_t value, unsigned width) {
+  if (width >= 64)
+    return success();
+  int64_t minValue = -(int64_t{1} << (width - 1));
+  int64_t maxValue = (int64_t{1} << (width - 1)) - 1;
+  if (value < minValue || value > maxValue)
+    return op->emitError(
+        "integer scalar does not fit in the tensor element type");
+  return success();
+}
+
 LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
                                       Value context, bool scalarOther,
                                       hip::ElementwiseKind kind,
                                       StringRef name) {
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-  if (!inputType || !inputType.hasStaticShape() ||
-      !inputType.getElementType().isInteger(64)) {
+  auto elementType = inputType
+                         ? dyn_cast<IntegerType>(inputType.getElementType())
+                         : IntegerType();
+  if (!inputType || !inputType.hasStaticShape() || !elementType ||
+      !supportedIntegerWidth(elementType.getWidth())) {
     return op->emitError() << "integer " << name
-                           << " requires a static i64 tensor";
+                           << " requires a static i16, i32, or i64 tensor";
   }
   FailureOr<int64_t> alpha = readI64Scalar(op->getOperand(2));
   if (failed(alpha))
@@ -147,19 +165,24 @@ LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
       op->erase();
       return success();
     }
-    Value delta = arith::ConstantOp::create(
-        builder, loc, builder.getI64IntegerAttr(*alpha * *other));
-    auto scalarType = RankedTensorType::get({}, inputType.getElementType());
-    rhs = tensor::SplatOp::create(builder, loc, scalarType, delta);
+    int64_t delta = *alpha * *other;
+    if (failed(integerScalarFits(op, delta, elementType.getWidth())))
+      return failure();
+    Value deltaValue = arith::ConstantOp::create(
+        builder, loc, IntegerAttr::get(elementType, delta));
+    auto scalarType = RankedTensorType::get({}, elementType);
+    rhs = tensor::SplatOp::create(builder, loc, scalarType, deltaValue);
   } else {
     auto otherType = dyn_cast<RankedTensorType>(rhs.getType());
-    if (!otherType || otherType.getElementType() != inputType.getElementType())
-      return op->emitError()
-             << "integer " << name << " other must be an i64 tensor";
+    if (!otherType || otherType.getElementType() != elementType)
+      return op->emitError() << "integer " << name
+                             << " other must match the input element type";
     if (*alpha != 1) {
+      if (failed(integerScalarFits(op, *alpha, elementType.getWidth())))
+        return failure();
       Value alphaValue = arith::ConstantOp::create(
-          builder, loc, builder.getI64IntegerAttr(*alpha));
-      auto scalarType = RankedTensorType::get({}, inputType.getElementType());
+          builder, loc, IntegerAttr::get(elementType, *alpha));
+      auto scalarType = RankedTensorType::get({}, elementType);
       Value alphaTensor =
           tensor::SplatOp::create(builder, loc, scalarType, alphaValue);
       FailureOr<Value> scaled =
@@ -302,11 +325,15 @@ LogicalResult lowerAtenMulTensor(Operation *op, OpBuilder &builder,
       dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
   auto lhsType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  auto elementType =
+      lhsType ? dyn_cast<IntegerType>(lhsType.getElementType()) : IntegerType();
   if (!valueTensor || !lhsType || !rhsType || !lhsType.hasStaticShape() ||
-      !rhsType.hasStaticShape() || !lhsType.getElementType().isInteger(64) ||
-      rhsType.getElementType() != lhsType.getElementType() ||
+      !rhsType.hasStaticShape() || !elementType ||
+      !supportedIntegerWidth(elementType.getWidth()) ||
+      rhsType.getElementType() != elementType ||
       llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
-    return op->emitError("integer aten.mul requires static i64 tensors");
+    return op->emitError(
+        "integer aten.mul requires static i16, i32, or i64 tensors");
   }
   auto resultType =
       RankedTensorType::get(valueTensor.getSizes(), lhsType.getElementType());

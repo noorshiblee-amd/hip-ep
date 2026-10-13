@@ -227,6 +227,17 @@ module {
     return %y : !torch.vtensor<[4],si64>
   }
 
+  func.func @add_mul_i32(%x: !torch.vtensor<[1,4],si32>, %mask: !torch.vtensor<[1,4],si32>) -> !torch.vtensor<[1,4],si32> {
+    // CHECK-LABEL: func.func @add_mul_i32
+    %one = torch.constant.int 1
+    %sum = torch.aten.add.Scalar %x, %one, %one : !torch.vtensor<[1,4],si32>, !torch.int, !torch.int -> !torch.vtensor<[1,4],si32>
+    %y = torch.aten.mul.Tensor %sum, %mask : !torch.vtensor<[1,4],si32>, !torch.vtensor<[1,4],si32> -> !torch.vtensor<[1,4],si32>
+    // CHECK: hip.add
+    // CHECK: hip.mul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4],si32>
+  }
+
   func.func @mul_i64(%a: !torch.vtensor<[1,4],si64>, %b: !torch.vtensor<[4,1],si64>) -> !torch.vtensor<[4,4],si64> {
     // CHECK-LABEL: func.func @mul_i64
     %y = torch.aten.mul.Tensor %a, %b : !torch.vtensor<[1,4],si64>, !torch.vtensor<[4,1],si64> -> !torch.vtensor<[4,4],si64>
