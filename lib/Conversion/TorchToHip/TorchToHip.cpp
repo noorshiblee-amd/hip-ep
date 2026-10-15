@@ -8,6 +8,7 @@
 
 #include "hip/Conversion/TorchToHip/Passes.h"
 #include "hip/Dialect/IR/HipDialect.h"
+#include "hip/Dialect/Torch/IR/TorchOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -68,9 +69,10 @@ LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
     FailureOr<Type> converted = torch::toBuiltinType(arg.getType());
     if (failed(converted)) {
       return func.emitError()
-             << "argument " << index
-             << " has unsupported Torch type " << arg.getType()
-             << "; tensor element type must be f16, f32, or bf16";
+             << "argument " << index << " has unsupported Torch type "
+             << arg.getType()
+             << "; tensor element type must be f16, f32, bf16, i1, or an "
+                "integer";
     }
     arg.setType(*converted);
     argTypes.push_back(*converted);
@@ -113,13 +115,38 @@ LogicalResult lowerFunction(func::FuncOp func,
       if (torch::isTorchDialectOp(op))
         pending.push_back(op);
     });
+    int before = static_cast<int>(pending.size());
     for (Operation *op : pending) {
       auto it = byName.find(op->getName().getStringRef());
       if (it == byName.end())
         continue;
       bool ready = true;
       for (Value operand : op->getOperands()) {
-        if (torch::isTorchType(operand.getType()))
+        // None, device, and string operands are dropped by the consumer.
+        // An integer list must already be an i64 tensor. A tensor list stays
+        // a ListConstruct so cat and index can read its elements.
+        Type type = operand.getType();
+        if (isa<torch::TorchNoneType, torch::DeviceType, torch::TorchStringType>(
+                type))
+          continue;
+        if (auto list = dyn_cast<torch::ListType>(type)) {
+          if (!isa<torch::IntType>(list.getElementType()))
+            continue;
+        }
+        if (torch::isTorchType(type))
+          ready = false;
+      }
+      // split_with_sizes yields a tensor list. The unpack is ready only once
+      // that split's tensor, size list, and axis have left the Torch type
+      // system.
+      if (ready &&
+          op->getName().getStringRef() == "torch.prim.ListUnpack") {
+        Operation *split = op->getOperand(0).getDefiningOp();
+        if (split && split->getName().getStringRef() ==
+                         "torch.aten.split_with_sizes" &&
+            llvm::any_of(split->getOperands(), [](Value value) {
+              return torch::isTorchType(value.getType());
+            }))
           ready = false;
       }
       if (!ready)
@@ -128,9 +155,46 @@ LogicalResult lowerFunction(func::FuncOp func,
       Value context = func.getArgument(0);
       if (failed(it->second(op, builder, context)))
         return failure();
-      progress = true;
+      // The rewrite may have erased `op`. Do not touch it after this point.
     }
+    int after = 0;
+    func.walk([&](Operation *op) {
+      if (torch::isTorchDialectOp(op))
+        ++after;
+    });
+    // A rewrite that leaves its op in place (a tensor list waiting on cat or
+    // index) must not count as progress, or this loop never finishes.
+    if (after < before)
+      progress = true;
   }
+
+  SmallVector<Operation *> droppedLists;
+  SmallVector<Operation *> droppedConstants;
+  func.walk([&](Operation *op) {
+    StringRef name = op->getName().getStringRef();
+    if (name == "torch.prim.ListConstruct")
+      droppedLists.push_back(op);
+    else if (name == "torch.constant.none" || name == "torch.constant.device" ||
+             name == "torch.constant.str")
+      droppedConstants.push_back(op);
+  });
+  // A use-empty list can still reference `torch.constant.none` (a full
+  // slice inside aten.index.Tensor). Erase lists first so those constants
+  // become dead.
+  auto eraseIfDead = [](Operation *op) {
+    if (!op->use_empty()) {
+      op->emitError("still has uses after Torch-to-HIP conversion");
+      return failure();
+    }
+    op->erase();
+    return success();
+  };
+  for (Operation *op : droppedLists)
+    if (failed(eraseIfDead(op)))
+      return failure();
+  for (Operation *op : droppedConstants)
+    if (failed(eraseIfDead(op)))
+      return failure();
 
   LogicalResult leftover = success();
   func.walk([&](Operation *op) {
@@ -154,9 +218,8 @@ LogicalResult lowerFunction(func::FuncOp func,
     if (torch::isTorchType(type))
       return func.emitError("Torch type survived conversion: ") << type;
   }
-  func.setFunctionType(FunctionType::get(func.getContext(),
-                                         func.getArgumentTypes(),
-                                         ret.getOperandTypes()));
+  func.setFunctionType(FunctionType::get(
+      func.getContext(), func.getArgumentTypes(), ret.getOperandTypes()));
   return success();
 }
 

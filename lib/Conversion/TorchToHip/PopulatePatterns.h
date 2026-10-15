@@ -14,9 +14,9 @@
 namespace mlir {
 namespace torch {
 
-/// One accepted Torch operation. The rewrite sees builtin operand types;
-/// the result type may still be a Torch value tensor and is converted
-/// through toBuiltinTensorType. On success the operation is erased.
+/// One accepted Torch operation. The rewrite sees builtin operand types.
+/// On success it erases the operation, except a tensor `ListConstruct`,
+/// which stays until cat or index has read it.
 using TorchRewriteFn = LogicalResult (*)(Operation *op, OpBuilder &builder,
                                          Value context);
 
@@ -26,6 +26,8 @@ struct TorchRewrite {
 };
 
 void populateTorchToHipRewrites(SmallVectorImpl<TorchRewrite> &rewrites);
+
+void populateTorchModelRewrites(SmallVectorImpl<TorchRewrite> &rewrites);
 
 } // namespace torch
 } // namespace mlir

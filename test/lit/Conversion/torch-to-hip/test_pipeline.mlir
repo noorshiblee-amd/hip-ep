@@ -7,8 +7,8 @@ module {
   func.func @main_graph(%lhs: !torch.vtensor<[4],f32>, %rhs: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK-LABEL: func.func @main_graph
     // CHECK-SAME: !hip.context
-    // CHECK: hip.add
     // CHECK: hip.alloc_output
+    // CHECK: hip.add
     // CHECK-NOT: torch.
     %alpha = torch.constant.int 1
     %output = torch.aten.add.Tensor %lhs, %rhs, %alpha : !torch.vtensor<[4],f32>, !torch.vtensor<[4],f32>, !torch.int -> !torch.vtensor<[4],f32>
