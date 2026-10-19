@@ -46,11 +46,13 @@ Type ListType::parse(AsmParser &parser) {
   if (parser.parseLess())
     return {};
   Type element;
-  // The producer prints `int`, `vtensor`, and `optional<vtensor>` rather than
-  // the fully qualified Torch type inside the angle brackets.
+  // The producer prints `int`, `float`, `vtensor`, and `optional<vtensor>`
+  // rather than the fully qualified Torch type inside the angle brackets.
   MLIRContext *context = parser.getContext();
   if (succeeded(parser.parseOptionalKeyword("int"))) {
     element = IntType::get(context);
+  } else if (succeeded(parser.parseOptionalKeyword("float"))) {
+    element = TorchFloatType::get(context);
   } else if (succeeded(parser.parseOptionalKeyword("vtensor"))) {
     element = BareTensorType::get(context);
   } else if (succeeded(parser.parseOptionalKeyword("optional"))) {
@@ -70,6 +72,8 @@ void ListType::print(AsmPrinter &printer) const {
   printer << '<';
   if (isa<IntType>(getElementType()))
     printer << "int";
+  else if (isa<TorchFloatType>(getElementType()))
+    printer << "float";
   else if (isa<BareTensorType>(getElementType()))
     printer << "vtensor";
   else if (isa<OptionalTensorType>(getElementType()))

@@ -392,8 +392,8 @@ def AtenSliceTensorOp : Torch_Op<"aten.slice.Tensor", [Pure]> {
 }
 
 def AtenUpsampleNearest2dVecOp : Torch_Op<"aten.upsample_nearest2d.vec", [Pure]> {
-  let summary = "Nearest-neighbor resize to a size list";
-  let arguments = (ins ValueTensorType:$self, ListType:$output_size, AnyType:$scale_factors);
+  let summary = "Nearest-neighbor resize; size or scales may be none";
+  let arguments = (ins ValueTensorType:$self, AnyType:$output_size, AnyType:$scale_factors);
   let results = (outs ValueTensorType:$result);
 }
 
@@ -490,8 +490,8 @@ def AtenSelectIntOp : Torch_Op<"aten.select.int", [Pure]> {
 }
 
 def PrimNumToTensorScalarOp : Torch_Op<"prim.NumToTensor.Scalar", [Pure]> {
-  let summary = "Scalar integer to a rank-0 tensor";
-  let arguments = (ins IntType:$a);
+  let summary = "Scalar integer or float to a rank-0 tensor";
+  let arguments = (ins AnyType:$a);
   let results = (outs ValueTensorType:$result);
 }
 
@@ -640,6 +640,12 @@ def AtenSignOp : Torch_Op<"aten.sign", [Pure]> {
 
 def AtenCeilOp : Torch_Op<"aten.ceil", [Pure]> {
   let summary = "Elementwise ceiling";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenFloorOp : Torch_Op<"aten.floor", [Pure]> {
+  let summary = "Elementwise floor";
   let arguments = (ins ValueTensorType:$self);
   let results = (outs ValueTensorType:$result);
 }

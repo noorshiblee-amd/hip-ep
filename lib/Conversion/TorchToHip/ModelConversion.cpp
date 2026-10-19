@@ -793,6 +793,10 @@ LogicalResult lowerCeil(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTyped<hip::CeilOp>(op, builder, context, "aten.ceil");
 }
 
+LogicalResult lowerFloor(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTyped<hip::FloorOp>(op, builder, context, "aten.floor");
+}
+
 LogicalResult lowerLog(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTyped<hip::LogOp>(op, builder, context, "aten.log");
 }
@@ -1211,15 +1215,20 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
     op->erase();
     return success();
   }
-  if (tensorIndices.size() != list->getNumOperands())
+  // A contiguous block of tensor indices, with none as a full slice
+  // around that block, is GatherND. Leading full slices are batch_dims.
+  // Before: index [none, none, h<3x1>, w<3>] on tensor<1x2x4x4>
+  // After:  hip.gather_nd {batch_dims = 2}
+  int64_t firstAxis = tensorAxes.front();
+  int64_t lastAxis = tensorAxes.back();
+  if (lastAxis - firstAxis + 1 != static_cast<int64_t>(tensorAxes.size()) ||
+      lastAxis >= dataType.getRank())
     return op->emitError(
         "aten.index.Tensor mixed None and multiple indices are not supported");
 
   int64_t rank = 0;
   SmallVector<RankedTensorType> indexTypes;
-  for (Value index : list->getOperands()) {
-    if (isa<torch::TorchNoneType>(index.getType()))
-      return op->emitError("aten.index.Tensor None index is not supported");
+  for (Value index : tensorIndices) {
     auto indexType = dyn_cast<RankedTensorType>(index.getType());
     if (!indexType || !indexType.hasStaticShape())
       return op->emitError("aten.index.Tensor index must be static");
@@ -1243,7 +1252,7 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   Location loc = op->getLoc();
   SmallVector<Value> stacked;
   auto broadcastType = RankedTensorType::get(broadcast, builder.getI64Type());
-  for (Value index : list->getOperands()) {
+  for (Value index : tensorIndices) {
     Value current = index;
     auto indexType = cast<RankedTensorType>(index.getType());
     if (indexType.getElementType() != builder.getI64Type()) {
@@ -1282,12 +1291,42 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   }
   Value indices =
       tensor::ConcatOp::create(builder, loc, rank, stacked).getResult();
+  SmallVector<int64_t> expected(dataType.getShape().begin(),
+                                dataType.getShape().begin() + firstAxis);
+  expected.append(broadcast.begin(), broadcast.end());
+  expected.append(dataType.getShape().begin() + lastAxis + 1,
+                  dataType.getShape().end());
+  if (expected != resultType->getShape())
+    return op->emitError("aten.index.Tensor result shape does not match");
+  if (firstAxis > 0) {
+    SmallVector<int64_t> unit(firstAxis, 1);
+    unit.append(broadcast.begin(), broadcast.end());
+    unit.push_back(static_cast<int64_t>(tensorIndices.size()));
+    auto unitType = RankedTensorType::get(unit, builder.getI64Type());
+    indices = tensor::ReshapeOp::create(builder, loc, unitType, indices,
+                                        i64Vector(builder, loc, unit))
+                  .getResult();
+    SmallVector<int64_t> expanded(dataType.getShape().begin(),
+                                  dataType.getShape().begin() + firstAxis);
+    expanded.append(broadcast.begin(), broadcast.end());
+    expanded.push_back(static_cast<int64_t>(tensorIndices.size()));
+    if (expanded != unit) {
+      auto expandedType = RankedTensorType::get(expanded, builder.getI64Type());
+      FailureOr<Value> expandedInit = emptyStatic(builder, loc, expandedType);
+      if (failed(expandedInit))
+        return failure();
+      indices = hip::ExpandOp::create(builder, loc, context, indices,
+                                      i64Vector(builder, loc, expanded),
+                                      *expandedInit)
+                    ->getResult(0);
+    }
+  }
   FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
   if (failed(init))
     return failure();
   auto gathered =
       hip::GatherNDOp::create(builder, loc, context, op->getOperand(0), indices,
-                              *init, builder.getI64IntegerAttr(0));
+                              *init, builder.getI64IntegerAttr(firstAxis));
   op->getResult(0).replaceAllUsesWith(gathered->getResult(0));
   op->erase();
   return success();
@@ -2404,6 +2443,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.abs", lowerAbs});
   rewrites.push_back({"torch.aten.sign", lowerSign});
   rewrites.push_back({"torch.aten.ceil", lowerCeil});
+  rewrites.push_back({"torch.aten.floor", lowerFloor});
   rewrites.push_back({"torch.aten.log", lowerLog});
   rewrites.push_back({"torch.aten.sqrt", lowerSqrt});
   rewrites.push_back({"torch.aten.bitwise_not", lowerBitwiseNot});

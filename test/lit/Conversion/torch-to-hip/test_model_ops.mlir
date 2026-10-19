@@ -159,6 +159,39 @@ module {
     return %y : !torch.vtensor<[1,4,8],f32>
   }
 
+  func.func @index_spatial(%x: !torch.vtensor<[1,2,4,4],f32>, %h: !torch.vtensor<[3,1],si64>, %w: !torch.vtensor<[3],si64>) -> !torch.vtensor<[1,2,3,3],f32> {
+    // CHECK-LABEL: func.func @index_spatial
+    %none0 = torch.constant.none
+    %none1 = torch.constant.none
+    %list = torch.prim.ListConstruct %none0, %none1, %h, %w : (!torch.none, !torch.none, !torch.vtensor<[3,1],si64>, !torch.vtensor<[3],si64>) -> !torch.list<optional<vtensor>>
+    %y = torch.aten.index.Tensor %x, %list : !torch.vtensor<[1,2,4,4],f32>, !torch.list<optional<vtensor>> -> !torch.vtensor<[1,2,3,3],f32>
+    // CHECK: hip.gather_nd
+    // CHECK-SAME: batch_dims = 2
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,3,3],f32>
+  }
+
+  func.func @num_to_tensor_float() -> !torch.vtensor<[],f32> {
+    // CHECK-LABEL: func.func @num_to_tensor_float
+    %one = torch.constant.float 1.000000e+00
+    %scalar = torch.prim.NumToTensor.Scalar %one : !torch.float -> !torch.vtensor<[],f32>
+    // CHECK: tensor.splat
+    // CHECK-NOT: torch.
+    return %scalar : !torch.vtensor<[],f32>
+  }
+
+  func.func @upsample_scales(%x: !torch.vtensor<[1,4,2,2],f32>) -> !torch.vtensor<[1,4,4,4],f32> {
+    // CHECK-LABEL: func.func @upsample_scales
+    %none = torch.constant.none
+    %two = torch.constant.float 2.000000e+00
+    %two_b = torch.constant.float 2.000000e+00
+    %scales = torch.prim.ListConstruct %two, %two_b : (!torch.float, !torch.float) -> !torch.list<float>
+    %y = torch.aten.upsample_nearest2d.vec %x, %none, %scales : !torch.vtensor<[1,4,2,2],f32>, !torch.none, !torch.list<float> -> !torch.vtensor<[1,4,4,4],f32>
+    // CHECK: hip.resize
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,4,4],f32>
+  }
+
   func.func @l2_norm(%x: !torch.vtensor<[1,4],f32>) -> !torch.vtensor<[1,1],f32> {
     // CHECK-LABEL: func.func @l2_norm
     %two = torch.constant.int 2
@@ -221,9 +254,11 @@ module {
     // CHECK-LABEL: func.func @log_ceil_sqrt
     %logged = torch.aten.log %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
     %ceiled = torch.aten.ceil %logged : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
-    %y = torch.aten.sqrt %ceiled : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    %floored = torch.aten.floor %ceiled : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    %y = torch.aten.sqrt %floored : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
     // CHECK: hip.log
     // CHECK: hip.ceil
+    // CHECK: hip.floor
     // CHECK: hip.sqrt
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[4],f32>

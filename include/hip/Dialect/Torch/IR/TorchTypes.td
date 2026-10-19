@@ -34,7 +34,8 @@ def TorchNoneType : Torch_Type<"TorchNone", "none"> {
 }
 
 // Printed as `!torch.list<int>`. The element mnemonic is custom because the
-// producer writes `int`, not `!torch.int`, inside the angle brackets.
+// producer writes `int`, `float`, `vtensor`, or `optional<vtensor>`, not a
+// fully qualified type, inside the angle brackets.
 def ListType : Torch_Type<"List", "list"> {
   let summary = "Torch list";
   let parameters = (ins "mlir::Type":$elementType);
