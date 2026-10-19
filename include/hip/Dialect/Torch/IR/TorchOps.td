@@ -270,6 +270,45 @@ def AtenVarMeanCorrectionOp : Torch_Op<"aten.var_mean.correction", [Pure]> {
   let results = (outs ValueTensorType:$var, ValueTensorType:$mean);
 }
 
+def AtenAdaptiveMaxPool2dOp : Torch_Op<"aten.adaptive_max_pool2d", [Pure]> {
+  let summary = "Adaptive max pool over the last two axes";
+  let arguments = (ins ValueTensorType:$self, ListType:$output_size);
+  let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenUnfoldOp : Torch_Op<"aten.unfold", [Pure]> {
+  let summary = "Sliding windows along one axis";
+  let arguments = (ins
+    ValueTensorType:$self,
+    IntType:$dimension,
+    IntType:$size,
+    IntType:$step
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIndexPutOp : Torch_Op<"aten.index_put", [Pure]> {
+  let summary = "Write values through a tensor index list";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$indices,
+    ValueTensorType:$values,
+    TorchBoolType:$accumulate
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenVarCorrectionOp : Torch_Op<"aten.var.correction", [Pure]> {
+  let summary = "Variance";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$dim,
+    IntType:$correction,
+    TorchBoolType:$keepdim
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenWhereSelfOp : Torch_Op<"aten.where.self", [Pure]> {
   let summary = "Select elements from two tensors";
   let arguments = (ins
@@ -836,6 +875,175 @@ def AtenTopkOp : Torch_Op<"aten.topk", [Pure]> {
     TorchBoolType:$sorted
   );
   let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenOneHotOp : Torch_Op<"aten.one_hot", [Pure]> {
+  let summary = "One-hot encode integer indices";
+  let arguments = (ins ValueTensorType:$self, IntType:$num_classes);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenRmsNormOp : Torch_Op<"aten.rms_norm", [Pure]> {
+  let summary = "Root-mean-square normalization";
+  let arguments = (ins
+    ValueTensorType:$input,
+    ListType:$normalized_shape,
+    AnyType:$weight,
+    AnyType:$eps
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEyeOp : Torch_Op<"aten.eye", [Pure]> {
+  let summary = "Square identity matrix";
+  let arguments = (ins
+    IntType:$n,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    AnyType:$pin_memory
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEyeMOp : Torch_Op<"aten.eye.m", [Pure]> {
+  let summary = "Rectangular identity matrix";
+  let arguments = (ins
+    IntType:$n,
+    IntType:$m,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    AnyType:$pin_memory
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIsfiniteOp : Torch_Op<"aten.isfinite", [Pure]> {
+  let summary = "True where a value is finite";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLogaddexpOp : Torch_Op<"aten.logaddexp", [Pure]> {
+  let summary = "Log of the sum of exponentials";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLogaddexp2Op : Torch_Op<"aten.logaddexp2", [Pure]> {
+  let summary = "Base-2 log of the sum of base-2 exponentials";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIscloseOp : Torch_Op<"aten.isclose", [Pure]> {
+  let summary = "Elementwise closeness test";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ValueTensorType:$other,
+    AnyType:$rtol,
+    AnyType:$atol,
+    TorchBoolType:$equal_nan
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenEmptyLikeOp : Torch_Op<"aten.empty_like", [Pure]> {
+  let summary = "Uninitialized tensor shaped like self";
+  let arguments = (ins
+    ValueTensorType:$self,
+    AnyType:$dtype,
+    AnyType:$layout,
+    AnyType:$device,
+    AnyType:$pin_memory,
+    AnyType:$memory_format
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSiluOp : Torch_Op<"aten.silu", [Pure]> {
+  let summary = "SiLU activation";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenErfOp : Torch_Op<"aten.erf", [Pure]> {
+  let summary = "Gauss error function";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLeakyReluOp : Torch_Op<"aten.leaky_relu", [Pure]> {
+  let summary = "Leaky ReLU";
+  let arguments = (ins ValueTensorType:$self, AnyType:$negative_slope);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenSoftplusOp : Torch_Op<"aten.softplus", [Pure]> {
+  let summary = "Softplus activation";
+  let arguments = (ins ValueTensorType:$self, AnyType:$beta, AnyType:$threshold);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenMaximumOp : Torch_Op<"aten.maximum", [Pure]> {
+  let summary = "Elementwise maximum";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenMatmulOp : Torch_Op<"aten.matmul", [Pure]> {
+  let summary = "Matrix product";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLayerNormOp : Torch_Op<"aten.layer_norm", [Pure]> {
+  let summary = "Layer normalization";
+  let arguments = (ins
+    ValueTensorType:$input,
+    ListType:$normalized_shape,
+    AnyType:$weight,
+    AnyType:$bias,
+    AnyType:$eps,
+    TorchBoolType:$cudnn_enable
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAllOp : Torch_Op<"aten.all", [Pure]> {
+  let summary = "True when every element is true";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenNormScalarOp : Torch_Op<"aten.norm.Scalar", [Pure]> {
+  let summary = "Vector p-norm of every element";
+  let arguments = (ins ValueTensorType:$self, AnyType:$p);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenNormScalarOptDimOp : Torch_Op<"aten.norm.ScalarOpt_dim", [Pure]> {
+  let summary = "Vector p-norm along axes";
+  let arguments = (ins
+    ValueTensorType:$self,
+    AnyType:$p,
+    ListType:$dim,
+    TorchBoolType:$keepdim
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLinalgNormOp : Torch_Op<"aten.linalg_norm", [Pure]> {
+  let summary = "Frobenius norm";
+  let arguments = (ins
+    ValueTensorType:$self,
+    AnyType:$ord,
+    AnyType:$dim,
+    TorchBoolType:$keepdim,
+    AnyType:$dtype
+  );
+  let results = (outs ValueTensorType:$result);
 }
 
 def AtenSplitWithSizesOp : Torch_Op<"aten.split_with_sizes", [Pure]> {

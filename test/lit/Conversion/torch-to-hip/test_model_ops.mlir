@@ -148,6 +148,41 @@ module {
     return %y : !torch.vtensor<[1,4,4,4],f32>
   }
 
+  func.func @pad_crop(%x: !torch.vtensor<[1,30,30],f32>) -> !torch.vtensor<[1,28,28],f32> {
+    // CHECK-LABEL: func.func @pad_crop
+    %m1 = torch.constant.int -1
+    %pads = torch.prim.ListConstruct %m1, %m1, %m1, %m1 : (!torch.int, !torch.int, !torch.int, !torch.int) -> !torch.list<int>
+    %zero = torch.constant.float 0.000000e+00
+    %y = torch.aten.constant_pad_nd %x, %pads, %zero : !torch.vtensor<[1,30,30],f32>, !torch.list<int>, !torch.float -> !torch.vtensor<[1,28,28],f32>
+    // CHECK: tensor.extract_slice
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,28,28],f32>
+  }
+
+  func.func @adaptive_max_pool(%x: !torch.vtensor<[1,2,8,8],f32>) -> !torch.vtensor<[1,2,2,1],f32> {
+    // CHECK-LABEL: func.func @adaptive_max_pool
+    %h = torch.constant.int 2
+    %w = torch.constant.int 1
+    %size = torch.prim.ListConstruct %h, %w : (!torch.int, !torch.int) -> !torch.list<int>
+    %v, %i = torch.aten.adaptive_max_pool2d %x, %size : !torch.vtensor<[1,2,8,8],f32>, !torch.list<int> -> !torch.vtensor<[1,2,2,1],f32>, !torch.vtensor<[1,2,2,1],si64>
+    // CHECK: hip.pool
+    // CHECK-SAME: pool_mode = 1
+    // CHECK-NOT: torch.
+    return %v : !torch.vtensor<[1,2,2,1],f32>
+  }
+
+  func.func @unfold(%x: !torch.vtensor<[1,2,8],f32>) -> !torch.vtensor<[1,2,3,4],f32> {
+    // CHECK-LABEL: func.func @unfold
+    %dim = torch.constant.int 2
+    %size = torch.constant.int 4
+    %step = torch.constant.int 2
+    %y = torch.aten.unfold %x, %dim, %size, %step : !torch.vtensor<[1,2,8],f32>, !torch.int, !torch.int, !torch.int -> !torch.vtensor<[1,2,3,4],f32>
+    // CHECK: tensor.extract_slice
+    // CHECK: tensor.concat
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,3,4],f32>
+  }
+
   func.func @index_full_slice(%x: !torch.vtensor<[1,4,8],f32>, %ids: !torch.vtensor<[8],si64>) -> !torch.vtensor<[1,4,8],f32> {
     // CHECK-LABEL: func.func @index_full_slice
     %none0 = torch.constant.none
@@ -169,6 +204,19 @@ module {
     // CHECK-SAME: batch_dims = 2
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[1,2,3,3],f32>
+  }
+
+  func.func @index_put(%x: !torch.vtensor<[1,2,4,4],f32>, %h: !torch.vtensor<[3,1],si64>, %w: !torch.vtensor<[3],si64>, %v: !torch.vtensor<[1,2,3,3],f32>) -> !torch.vtensor<[1,2,4,4],f32> {
+    // CHECK-LABEL: func.func @index_put
+    %none0 = torch.constant.none
+    %none1 = torch.constant.none
+    %list = torch.prim.ListConstruct %none0, %none1, %h, %w : (!torch.none, !torch.none, !torch.vtensor<[3,1],si64>, !torch.vtensor<[3],si64>) -> !torch.list<optional<vtensor>>
+    %acc = torch.constant.bool true
+    %y = torch.aten.index_put %x, %list, %v, %acc : !torch.vtensor<[1,2,4,4],f32>, !torch.list<optional<vtensor>>, !torch.vtensor<[1,2,3,3],f32>, !torch.bool -> !torch.vtensor<[1,2,4,4],f32>
+    // CHECK: hip.scatter_nd
+    // CHECK-SAME: reduction = "add"
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,4,4],f32>
   }
 
   func.func @num_to_tensor_float() -> !torch.vtensor<[],f32> {
@@ -704,5 +752,126 @@ module {
     // CHECK: tensor.concat
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[1,4,4],f32>
+  }
+
+  func.func @one_hot(%ids: !torch.vtensor<[2],si64>) -> !torch.vtensor<[2,4],f32> {
+    // CHECK-LABEL: func.func @one_hot
+    %n = torch.constant.int 4
+    %y = torch.aten.one_hot %ids, %n : !torch.vtensor<[2],si64>, !torch.int -> !torch.vtensor<[2,4],f32>
+    // CHECK: hip.one_hot
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,4],f32>
+  }
+
+  func.func @rms_norm(%x: !torch.vtensor<[2,4],f32>, %w: !torch.vtensor<[4],f32>) -> !torch.vtensor<[2,4],f32> {
+    // CHECK-LABEL: func.func @rms_norm
+    %c4 = torch.constant.int 4
+    %shape = torch.prim.ListConstruct %c4 : (!torch.int) -> !torch.list<int>
+    %eps = torch.constant.float 1.000000e-05
+    %y = torch.aten.rms_norm %x, %shape, %w, %eps : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.vtensor<[4],f32>, !torch.float -> !torch.vtensor<[2,4],f32>
+    // CHECK: hip.rms_norm
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,4],f32>
+  }
+
+  func.func @layer_norm(%x: !torch.vtensor<[2,4],f32>, %w: !torch.vtensor<[4],f32>) -> !torch.vtensor<[2,4],f32> {
+    // CHECK-LABEL: func.func @layer_norm
+    %c4 = torch.constant.int 4
+    %shape = torch.prim.ListConstruct %c4 : (!torch.int) -> !torch.list<int>
+    %none = torch.constant.none
+    %eps = torch.constant.float 1.000000e-05
+    %false = torch.constant.bool false
+    %y = torch.aten.layer_norm %x, %shape, %w, %none, %eps, %false : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.vtensor<[4],f32>, !torch.none, !torch.float, !torch.bool -> !torch.vtensor<[2,4],f32>
+    // CHECK: hip.layer_norm
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,4],f32>
+  }
+
+  func.func @eye() -> !torch.vtensor<[3,3],f32> {
+    // CHECK-LABEL: func.func @eye
+    %n = torch.constant.int 3
+    %none = torch.constant.none
+    %y = torch.aten.eye %n, %none, %none, %none, %none : !torch.int, !torch.none, !torch.none, !torch.none, !torch.none -> !torch.vtensor<[3,3],f32>
+    // CHECK: hip.equal
+    // CHECK: hip.cast
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[3,3],f32>
+  }
+
+  func.func @isfinite(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],i1> {
+    // CHECK-LABEL: func.func @isfinite
+    %y = torch.aten.isfinite %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],i1>
+    // CHECK: hip.abs
+    // CHECK: hip.and
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],i1>
+  }
+
+  func.func @logaddexp(%a: !torch.vtensor<[4],f32>, %b: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @logaddexp
+    %y = torch.aten.logaddexp %a, %b : !torch.vtensor<[4],f32>, !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.max
+    // CHECK: hip.exp
+    // CHECK: hip.log
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @isclose(%a: !torch.vtensor<[4],f32>, %b: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],i1> {
+    // CHECK-LABEL: func.func @isclose
+    %rtol = torch.constant.float 1.000000e-05
+    %atol = torch.constant.float 1.000000e-08
+    %false = torch.constant.bool false
+    %y = torch.aten.isclose %a, %b, %rtol, %atol, %false : !torch.vtensor<[4],f32>, !torch.vtensor<[4],f32>, !torch.float, !torch.float, !torch.bool -> !torch.vtensor<[4],i1>
+    // CHECK: hip.less
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],i1>
+  }
+
+  func.func @silu(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @silu
+    %y = torch.aten.silu %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.silu
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @matmul_vec(%a: !torch.vtensor<[3],f32>, %b: !torch.vtensor<[3,4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @matmul_vec
+    %y = torch.aten.matmul %a, %b : !torch.vtensor<[3],f32>, !torch.vtensor<[3,4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.matmul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @all_i1(%x: !torch.vtensor<[2,3],i1>) -> !torch.vtensor<[],i1> {
+    // CHECK-LABEL: func.func @all_i1
+    %y = torch.aten.all %x : !torch.vtensor<[2,3],i1> -> !torch.vtensor<[],i1>
+    // CHECK: hip.reduce_min
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[],i1>
+  }
+
+  func.func @var_correction(%x: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,1],f32> {
+    // CHECK-LABEL: func.func @var_correction
+    %dim = torch.constant.int -1
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %corr = torch.constant.int 1
+    %keep = torch.constant.bool true
+    %y = torch.aten.var.correction %x, %dims, %corr, %keep : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.int, !torch.bool -> !torch.vtensor<[2,1],f32>
+    // CHECK: hip.reduce_mean
+    // CHECK: hip.sub
+    // CHECK: hip.mul
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,1],f32>
+  }
+
+  func.func @norm_scalar(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[],f32> {
+    // CHECK-LABEL: func.func @norm_scalar
+    %p = torch.constant.int 2
+    %y = torch.aten.norm.Scalar %x, %p : !torch.vtensor<[4],f32>, !torch.int -> !torch.vtensor<[],f32>
+    // CHECK: hip.sqrt
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[],f32>
   }
 }
