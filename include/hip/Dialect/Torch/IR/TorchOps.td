@@ -422,6 +422,12 @@ def AtenBitwiseAndTensorOp : Torch_Op<"aten.bitwise_and.Tensor", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenLogicalAndOp : Torch_Op<"aten.logical_and", [Pure]> {
+  let summary = "Elementwise boolean and";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$other);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenEmptyStridedOp : Torch_Op<"aten.empty_strided", [Pure]> {
   let summary = "Uninitialized tensor used as a shape template";
   let arguments = (ins
@@ -739,6 +745,12 @@ def AtenLog1pOp : Torch_Op<"aten.log1p", [Pure]> {
 
 def AtenSqrtOp : Torch_Op<"aten.sqrt", [Pure]> {
   let summary = "Elementwise square root";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenReciprocalOp : Torch_Op<"aten.reciprocal", [Pure]> {
+  let summary = "Elementwise reciprocal";
   let arguments = (ins ValueTensorType:$self);
   let results = (outs ValueTensorType:$result);
 }

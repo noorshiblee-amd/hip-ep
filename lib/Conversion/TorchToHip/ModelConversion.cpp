@@ -767,6 +767,19 @@ LogicalResult lowerBitwiseAnd(Operation *op, OpBuilder &builder,
   return success();
 }
 
+LogicalResult lowerLogicalAnd(Operation *op, OpBuilder &builder,
+                              Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  auto lhsType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  if (failed(resultType) || !resultType->getElementType().isInteger(1) ||
+      !lhsType || !rhsType || !lhsType.getElementType().isInteger(1) ||
+      !rhsType.getElementType().isInteger(1)) {
+    return op->emitError("aten.logical_and requires i1 tensors");
+  }
+  return lowerBitwiseAnd(op, builder, context);
+}
+
 LogicalResult lowerEmpty(Operation *op, OpBuilder &builder, Value /*context*/) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -997,6 +1010,19 @@ LogicalResult lowerSign(Operation *op, OpBuilder &builder, Value context) {
 
 LogicalResult lowerSqrt(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryInferred<hip::SqrtOp>(op, builder, context, "aten.sqrt");
+}
+
+LogicalResult lowerReciprocal(Operation *op, OpBuilder &builder,
+                              Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (failed(resultType) || !isa<FloatType>(resultType->getElementType()) ||
+      !inputType ||
+      inputType.getElementType() != resultType->getElementType()) {
+    return op->emitError("aten.reciprocal requires a matching float tensor");
+  }
+  return lowerUnaryTensor<hip::ReciprocalOp>(op, builder, context,
+                                             "aten.reciprocal");
 }
 
 LogicalResult lowerBitwiseNot(Operation *op, OpBuilder &builder,
@@ -2808,6 +2834,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.slice_scatter", lowerSliceScatter});
   rewrites.push_back({"torch.aten.upsample_nearest2d.vec", lowerUpsample});
   rewrites.push_back({"torch.aten.bitwise_and.Tensor", lowerBitwiseAnd});
+  rewrites.push_back({"torch.aten.logical_and", lowerLogicalAnd});
   rewrites.push_back({"torch.aten.empty_strided", lowerEmpty});
   rewrites.push_back({"torch.prims.convert_element_type", lowerConvert});
   rewrites.push_back({"torch.aten.cat", lowerCat});
@@ -2860,6 +2887,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.floor", lowerFloor});
   rewrites.push_back({"torch.aten.log", lowerLog});
   rewrites.push_back({"torch.aten.sqrt", lowerSqrt});
+  rewrites.push_back({"torch.aten.reciprocal", lowerReciprocal});
   rewrites.push_back({"torch.aten.bitwise_not", lowerBitwiseNot});
   rewrites.push_back({"torch.aten.gt.Scalar", lowerGtScalar});
   rewrites.push_back({"torch.aten.lt.Scalar", lowerLtScalar});

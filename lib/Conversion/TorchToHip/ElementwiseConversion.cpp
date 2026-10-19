@@ -33,8 +33,8 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   FailureOr<RankedTensorType> resultType =
       torch::toBuiltinTensorType(op->getResult(0).getType());
   if (failed(resultType)) {
-    return op->emitError() << name
-                           << " result element type must be f16, f32, or bf16";
+    return op->emitError()
+           << name << " result element type must be f16, f32, bf16, or f64";
   }
 
   Value self = op->getOperand(0);
@@ -44,10 +44,17 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
   Type elementType = resultType->getElementType();
 
   auto selfType = dyn_cast<RankedTensorType>(self.getType());
-  if (!selfType ||
-      !torch::isAcceptedFloatElementType(selfType.getElementType())) {
-    return op->emitError() << name
-                           << " self must be an f16, f32, or bf16 tensor";
+  if (!selfType)
+    return op->emitError() << name << " self must be a tensor";
+  // A float result with an integer tensor operand is a cast, then the
+  // float kernel. Rank-0 integer scalars arrive this way.
+  if (!torch::isAcceptedFloatElementType(selfType.getElementType())) {
+    FailureOr<Value> promoted =
+        hip::castToElementType(builder, loc, context, self, elementType);
+    if (failed(promoted))
+      return op->emitError()
+             << name << " self must be an f16, f32, bf16, or f64 tensor";
+    self = *promoted;
   }
 
   if (scalarOther) {
@@ -70,7 +77,7 @@ LogicalResult lowerAlphaBinary(Operation *op, OpBuilder &builder, Value context,
         hip::castToElementType(builder, loc, context, other, elementType);
     if (failed(promoted))
       return op->emitError()
-             << name << " other must be an f16, f32, or bf16 tensor";
+             << name << " other must be an f16, f32, bf16, or f64 tensor";
     other = *promoted;
   }
 
@@ -253,7 +260,8 @@ FailureOr<RankedTensorType> floatResultType(Operation *op, StringRef name) {
   FailureOr<RankedTensorType> resultType =
       torch::toBuiltinTensorType(op->getResult(0).getType());
   if (failed(resultType)) {
-    op->emitError() << name << " result element type must be f16, f32, or bf16";
+    op->emitError() << name
+                    << " result element type must be f16, f32, bf16, or f64";
     return failure();
   }
   return resultType;
@@ -327,6 +335,25 @@ LogicalResult lowerAtenMulTensor(Operation *op, OpBuilder &builder,
   auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
   auto elementType =
       lhsType ? dyn_cast<IntegerType>(lhsType.getElementType()) : IntegerType();
+  // A bool multiply is a logical and. The integer mul kernel starts at i16.
+  // Before: mul %a, %b : tensor<4xi1> -> tensor<4xi1>
+  // After:  hip.and
+  if (valueTensor && lhsType && rhsType && elementType &&
+      elementType.getWidth() == 1 && rhsType.getElementType().isInteger(1) &&
+      lhsType.hasStaticShape() && rhsType.hasStaticShape() &&
+      !llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
+    auto resultType =
+        RankedTensorType::get(valueTensor.getSizes(), builder.getI1Type());
+    Value init =
+        tensor::EmptyOp::create(builder, op->getLoc(), resultType.getShape(),
+                                resultType.getElementType());
+    auto combined =
+        hip::AndOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                           op->getOperand(1), init);
+    op->getResult(0).replaceAllUsesWith(combined->getResult(0));
+    op->erase();
+    return success();
+  }
   if (!valueTensor || !lhsType || !rhsType || !lhsType.hasStaticShape() ||
       !rhsType.hasStaticShape() || !elementType ||
       !supportedIntegerWidth(elementType.getWidth()) ||

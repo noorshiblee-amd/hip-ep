@@ -633,4 +633,49 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[1,2,8],f32>
   }
+
+  func.func @reciprocal_f64(%x: !torch.vtensor<[64],f64>) -> !torch.vtensor<[64],f64> {
+    // CHECK-LABEL: func.func @reciprocal_f64
+    %y = torch.aten.reciprocal %x : !torch.vtensor<[64],f64> -> !torch.vtensor<[64],f64>
+    // CHECK: hip.reciprocal
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[64],f64>
+  }
+
+  func.func @logical_and(%a: !torch.vtensor<[8,4],i1>, %b: !torch.vtensor<[8,4],i1>) -> !torch.vtensor<[8,4],i1> {
+    // CHECK-LABEL: func.func @logical_and
+    %y = torch.aten.logical_and %a, %b : !torch.vtensor<[8,4],i1>, !torch.vtensor<[8,4],i1> -> !torch.vtensor<[8,4],i1>
+    // CHECK: hip.and
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[8,4],i1>
+  }
+
+  func.func @div_scalar_f64(%x: !torch.vtensor<[64],f64>) -> !torch.vtensor<[64],f64> {
+    // CHECK-LABEL: func.func @div_scalar_f64
+    %c = torch.constant.int 64
+    %y = torch.aten.div.Scalar %x, %c : !torch.vtensor<[64],f64>, !torch.int -> !torch.vtensor<[64],f64>
+    // CHECK: hip.div
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[64],f64>
+  }
+
+  func.func @mul_i1(%a: !torch.vtensor<[4],i1>, %b: !torch.vtensor<[4],i1>) -> !torch.vtensor<[4],i1> {
+    // CHECK-LABEL: func.func @mul_i1
+    %y = torch.aten.mul.Tensor %a, %b : !torch.vtensor<[4],i1>, !torch.vtensor<[4],i1> -> !torch.vtensor<[4],i1>
+    // CHECK: hip.and
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],i1>
+  }
+
+  func.func @sub_i64_scalar(%x: !torch.vtensor<[2,2],f32>) -> !torch.vtensor<[2,2],f32> {
+    // CHECK-LABEL: func.func @sub_i64_scalar
+    %one = torch.constant.int 1
+    %scalar = torch.prim.NumToTensor.Scalar %one : !torch.int -> !torch.vtensor<[],si64>
+    %alpha = torch.constant.int 1
+    %y = torch.aten.sub.Tensor %scalar, %x, %alpha : !torch.vtensor<[],si64>, !torch.vtensor<[2,2],f32>, !torch.int -> !torch.vtensor<[2,2],f32>
+    // CHECK: hip.cast
+    // CHECK: hip.sub
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,2],f32>
+  }
 }

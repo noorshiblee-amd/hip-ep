@@ -71,8 +71,8 @@ LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
       return func.emitError()
              << "argument " << index << " has unsupported Torch type "
              << arg.getType()
-             << "; tensor element type must be f16, f32, bf16, i1, or an "
-                "integer";
+             << "; tensor element type must be f16, f32, bf16, f64, i1, or "
+                "an integer";
     }
     arg.setType(*converted);
     argTypes.push_back(*converted);
@@ -126,8 +126,8 @@ LogicalResult lowerFunction(func::FuncOp func,
         // An integer list must already be an i64 tensor. A tensor list stays
         // a ListConstruct so cat and index can read its elements.
         Type type = operand.getType();
-        if (isa<torch::TorchNoneType, torch::DeviceType, torch::TorchStringType>(
-                type))
+        if (isa<torch::TorchNoneType, torch::DeviceType,
+                torch::TorchStringType>(type))
           continue;
         if (auto list = dyn_cast<torch::ListType>(type)) {
           if (!isa<torch::IntType>(list.getElementType()))
@@ -139,11 +139,10 @@ LogicalResult lowerFunction(func::FuncOp func,
       // split_with_sizes yields a tensor list. The unpack is ready only once
       // that split's tensor, size list, and axis have left the Torch type
       // system.
-      if (ready &&
-          op->getName().getStringRef() == "torch.prim.ListUnpack") {
+      if (ready && op->getName().getStringRef() == "torch.prim.ListUnpack") {
         Operation *split = op->getOperand(0).getDefiningOp();
-        if (split && split->getName().getStringRef() ==
-                         "torch.aten.split_with_sizes" &&
+        if (split &&
+            split->getName().getStringRef() == "torch.aten.split_with_sizes" &&
             llvm::any_of(split->getOperands(), [](Value value) {
               return torch::isTorchType(value.getType());
             }))

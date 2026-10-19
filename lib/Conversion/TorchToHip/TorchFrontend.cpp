@@ -30,7 +30,8 @@ bool mlir::torch::isTorchType(Type type) {
 }
 
 bool mlir::torch::isAcceptedFloatElementType(Type elementType) {
-  return elementType.isF16() || elementType.isF32() || elementType.isBF16();
+  return elementType.isF16() || elementType.isF32() || elementType.isBF16() ||
+         elementType.isF64();
 }
 
 FailureOr<RankedTensorType> mlir::torch::toBuiltinTensorType(Type type) {
@@ -49,11 +50,9 @@ FailureOr<Type> mlir::torch::toBuiltinType(Type type) {
     // goes through toBuiltinTensorType and rejects them there.
     Type dtype = valueTensor.getDtype();
     auto integer = dyn_cast<IntegerType>(dtype);
-    if (!integer ||
-        llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic))
+    if (!integer || llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic))
       return failure();
-    Type element =
-        IntegerType::get(type.getContext(), integer.getWidth());
+    Type element = IntegerType::get(type.getContext(), integer.getWidth());
     return Type(RankedTensorType::get(valueTensor.getSizes(), element));
   }
   if (isa<IntType>(type))
@@ -95,7 +94,7 @@ materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
       return dense;
     bool splat = false;
     if (!DenseElementsAttr::isValidRawBuffer(resultType, dense.getRawData(),
-                                            splat)) {
+                                             splat)) {
       return literal.emitError(
           "torch.vtensor.literal payload type does not match its result type");
     }
@@ -121,8 +120,8 @@ materializeLiteral(ValueTensorLiteralOp literal, RankedTensorType resultType) {
       return DenseElementsAttr(SplatElementsAttr::get(resultType, zero));
     }
     if (auto integer = dyn_cast<IntegerType>(resultType.getElementType())) {
-      return DenseElementsAttr(SplatElementsAttr::get(
-          resultType, IntegerAttr::get(integer, 0)));
+      return DenseElementsAttr(
+          SplatElementsAttr::get(resultType, IntegerAttr::get(integer, 0)));
     }
     return literal.emitError(
         "zero literal requires a float or integer element type");
