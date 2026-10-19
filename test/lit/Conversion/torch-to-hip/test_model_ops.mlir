@@ -217,6 +217,95 @@ module {
     return %y : !torch.vtensor<[3,4,2],si64>
   }
 
+  func.func @slice_empty_tail(%x: !torch.vtensor<[1,96],f32>) -> !torch.vtensor<[1,0],f32> {
+    // CHECK-LABEL: func.func @slice_empty_tail
+    %c1 = torch.constant.int 1
+    %c96 = torch.constant.int 96
+    %end = torch.constant.int 9223372036854775807
+    %step = torch.constant.int 1
+    %y = torch.aten.slice.Tensor %x, %c1, %c96, %end, %step : !torch.vtensor<[1,96],f32>, !torch.int, !torch.int, !torch.int, !torch.int -> !torch.vtensor<[1,0],f32>
+    // CHECK: tensor.extract_slice %{{.*}}[0, 0] [1, 0] [1, 1]
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,0],f32>
+  }
+
+  func.func @pow_tensor_tensor(%e: !torch.vtensor<[4],si32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @pow_tensor_tensor
+    %base = torch.vtensor.literal(dense<0.5> : tensor<f32>) : !torch.vtensor<[],f32>
+    %y = torch.aten.pow.Tensor_Tensor %base, %e : !torch.vtensor<[],f32>, !torch.vtensor<[4],si32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.cast
+    // CHECK: hip.log
+    // CHECK: hip.mul
+    // CHECK: hip.exp
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @mask_index_last(%x: !torch.vtensor<[1,4,8],f32>, %mask: !torch.vtensor<[1,4],i1>) -> !torch.vtensor<[1,8],f32> {
+    // CHECK-LABEL: func.func @mask_index_last
+    %c1 = torch.constant.int 1
+    %c0 = torch.constant.int 0
+    %cm1 = torch.constant.int -1
+    %c8 = torch.constant.int 8
+    %false = torch.constant.bool false
+    %none = torch.constant.none
+    %dims = torch.prim.ListConstruct %c1 : (!torch.int) -> !torch.list<int>
+    // CHECK: hip.cast
+    // CHECK: hip.reduce_sum
+    %count = torch.aten.sum.dim_IntList %mask, %dims, %false, %none : !torch.vtensor<[1,4],i1>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[1],si64>
+    // CHECK: tensor.cast
+    %u0, %u1, %u2 = torch.aten.unique_consecutive %count, %false, %false, %none : !torch.vtensor<[1],si64>, !torch.bool, !torch.bool, !torch.none -> !torch.vtensor<[?],si64>, !torch.vtensor<[0],si64>, !torch.vtensor<[0],si64>
+    %n = torch.aten.size.int %u0, %c0 : !torch.vtensor<[?],si64>, !torch.int -> !torch.int
+    // CHECK: arith.cmpi eq
+    %ok = torch.aten.eq.int %n, %c1 : !torch.int, !torch.int -> !torch.bool
+    %oki = torch.aten.Int.bool %ok : !torch.bool -> !torch.int
+    %msg = torch.constant.str "u0 == 1"
+    torch.aten._assert_scalar %oki, %msg : !torch.int, !torch.str
+    %idx = torch.prim.ListConstruct %mask : (!torch.vtensor<[1,4],i1>) -> !torch.list<optional<vtensor>>
+    // CHECK: hip.nonzero
+    // CHECK: hip.readback_dim
+    // CHECK: hip.compress
+    // CHECK-SAME: outs({{.*}} : tensor<?x8xf32>)
+    %rows = torch.aten.index.Tensor %x, %idx : !torch.vtensor<[1,4,8],f32>, !torch.list<optional<vtensor>> -> !torch.vtensor<[?,8],f32>
+    %shape = torch.prim.ListConstruct %c1, %cm1, %c8 : (!torch.int, !torch.int, !torch.int) -> !torch.list<int>
+    // CHECK: tensor.reshape {{.*}} -> tensor<1x?x8xf32>
+    %v = torch.aten.view %rows, %shape : !torch.vtensor<[?,8],f32>, !torch.list<int> -> !torch.vtensor<[1,?,8],f32>
+    // CHECK: tensor.dim
+    // CHECK: arith.subi
+    // CHECK: tensor.extract_slice
+    %last = torch.aten.select.int %v, %c1, %cm1 : !torch.vtensor<[1,?,8],f32>, !torch.int, !torch.int -> !torch.vtensor<[1,8],f32>
+    // CHECK-NOT: torch.
+    return %last : !torch.vtensor<[1,8],f32>
+  }
+
+  func.func @remainder_scalar(%x: !torch.vtensor<[1,16],si64>) -> !torch.vtensor<[1,16],si64> {
+    // CHECK-LABEL: func.func @remainder_scalar
+    %m = torch.constant.int 16384
+    %y = torch.aten.remainder.Scalar %x, %m : !torch.vtensor<[1,16],si64>, !torch.int -> !torch.vtensor<[1,16],si64>
+    // CHECK: hip.mod
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,16],si64>
+  }
+
+  func.func @log1p(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
+    // CHECK-LABEL: func.func @log1p
+    %y = torch.aten.log1p %x : !torch.vtensor<[4],f32> -> !torch.vtensor<[4],f32>
+    // CHECK: hip.add
+    // CHECK: hip.log
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],f32>
+  }
+
+  func.func @index_select(%t: !torch.vtensor<[10,4],f32>, %ids: !torch.vtensor<[3],si64>) -> !torch.vtensor<[3,4],f32> {
+    // CHECK-LABEL: func.func @index_select
+    %c0 = torch.constant.int 0
+    %y = torch.aten.index_select %t, %c0, %ids : !torch.vtensor<[10,4],f32>, !torch.int, !torch.vtensor<[3],si64> -> !torch.vtensor<[3,4],f32>
+    // CHECK: hip.gather
+    // CHECK-SAME: tensor<10x4xf32>, tensor<3xi64>
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[3,4],f32>
+  }
+
   func.func @unsqueeze_rank0(%x: !torch.vtensor<[],si64>) -> !torch.vtensor<[1],si64> {
     // CHECK-LABEL: func.func @unsqueeze_rank0
     %c0 = torch.constant.int 0

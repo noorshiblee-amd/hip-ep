@@ -291,6 +291,10 @@ FailureOr<Value> mlir::hip::castToElementType(OpBuilder &builder, Location loc,
     onnxDataType = 10;
   else if (elementType.isBF16())
     onnxDataType = 16;
+  else if (elementType.isInteger(32))
+    onnxDataType = 6;
+  else if (elementType.isInteger(64))
+    onnxDataType = 7;
   if (onnxDataType == 0)
     return failure();
 

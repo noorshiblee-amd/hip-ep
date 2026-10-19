@@ -9,6 +9,7 @@
 
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Torch/IR/TorchOps.h"
+#include "hip/datatype_abi.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -95,6 +96,20 @@ FailureOr<RankedTensorType> resultTensor(Operation *op, unsigned index) {
   }
   if (llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
     op->emitError("dynamic torch tensor result is not supported");
+    return failure();
+  }
+  Type element = valueTensor.getDtype();
+  if (auto integer = dyn_cast<IntegerType>(element))
+    element = IntegerType::get(element.getContext(), integer.getWidth());
+  return RankedTensorType::get(valueTensor.getSizes(), element);
+}
+
+// For the few ops whose result extent is data-dependent.
+FailureOr<RankedTensorType> dynamicResultTensor(Operation *op, unsigned index) {
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(index).getType());
+  if (!valueTensor) {
+    op->emitError("expected a ranked tensor result");
     return failure();
   }
   Type element = valueTensor.getDtype();
@@ -497,6 +512,87 @@ LogicalResult lowerAssert(Operation *op, OpBuilder & /*builder*/,
   return success();
 }
 
+LogicalResult lowerSizeInt(Operation *op, OpBuilder &builder,
+                           Value /*context*/) {
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
+  if (!inputType || failed(dim))
+    return op->emitError(
+        "aten.size.int requires a ranked input and constant dim");
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, inputType.getRank())))
+    return op->emitError("aten.size.int dim is out of range");
+  Location loc = op->getLoc();
+  Type i64 = builder.getI64Type();
+  Value size;
+  if (inputType.isDynamicDim(axis)) {
+    size = arith::IndexCastOp::create(
+        builder, loc, i64,
+        tensor::DimOp::create(builder, loc, op->getOperand(0), axis));
+  } else {
+    size = arith::ConstantOp::create(
+        builder, loc, i64,
+        builder.getI64IntegerAttr(inputType.getDimSize(axis)));
+  }
+  op->getResult(0).replaceAllUsesWith(size);
+  op->erase();
+  return success();
+}
+
+template <arith::CmpIPredicate Predicate>
+LogicalResult lowerIntCompare(Operation *op, OpBuilder &builder,
+                              Value /*context*/) {
+  Value lhs = op->getOperand(0);
+  Value rhs = op->getOperand(1);
+  if (!lhs.getType().isInteger(64) || !rhs.getType().isInteger(64))
+    return op->emitError("integer scalar compare expects i64 operands");
+  Value compared =
+      arith::CmpIOp::create(builder, op->getLoc(), Predicate, lhs, rhs);
+  op->getResult(0).replaceAllUsesWith(compared);
+  op->erase();
+  return success();
+}
+
+// A 1-D input with at most one element is already free of consecutive
+// duplicates. Only that case is lowered; inverse and counts must be off.
+// Before: unique_consecutive %x : tensor<1xsi64> -> tensor<?xsi64>, ...
+// After:  tensor.cast %x : tensor<1xi64> to tensor<?xi64>
+LogicalResult lowerUniqueConsecutive(Operation *op, OpBuilder &builder,
+                                     Value /*context*/) {
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  FailureOr<bool> inverse = readI1Scalar(op->getOperand(1));
+  FailureOr<bool> counts = readI1Scalar(op->getOperand(2));
+  if (!inputType || !inputType.hasStaticShape() || inputType.getRank() != 1 ||
+      inputType.getNumElements() > 1 || failed(inverse) || failed(counts) ||
+      *inverse || *counts ||
+      !isa<torch::TorchNoneType>(op->getOperand(3).getType())) {
+    return op->emitError("aten.unique_consecutive only lowers a 1-D input "
+                         "with at most one element");
+  }
+  Location loc = op->getLoc();
+  SmallVector<Value> replacements;
+  for (unsigned index : llvm::seq<unsigned>(0, op->getNumResults())) {
+    FailureOr<RankedTensorType> type = dynamicResultTensor(op, index);
+    if (failed(type))
+      return failure();
+    if (index == 0) {
+      replacements.push_back(
+          tensor::CastOp::create(builder, loc, *type, op->getOperand(0)));
+      continue;
+    }
+    FailureOr<Value> empty = emptyStatic(builder, loc, *type);
+    if (failed(empty))
+      return op->emitError(
+          "aten.unique_consecutive unused results must be static");
+    replacements.push_back(*empty);
+  }
+  for (auto [result, replacement] :
+       llvm::zip_equal(op->getResults(), replacements))
+    result.replaceAllUsesWith(replacement);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerArange(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -551,6 +647,12 @@ LogicalResult lowerSlice(Operation *op, OpBuilder &builder, Value /*context*/) {
   int64_t count = limit > begin ? (limit - begin + *step - 1) / *step : 0;
   if (!resultType->isDynamicDim(axis) && resultType->getDimSize(axis) != count)
     return op->emitError("aten.slice.Tensor result size does not match");
+  // tensor.extract_slice rejects an offset equal to the dim size, even
+  // for an empty slice.
+  // Before: slice [96:] of tensor<1x96xf32> -> tensor<1x0xf32>
+  // After:  tensor.extract_slice offsets [0, 0] sizes [1, 0]
+  if (count == 0)
+    begin = 0;
   SmallVector<OpFoldResult> offsets(inputType.getRank(),
                                     builder.getIndexAttr(0));
   SmallVector<OpFoldResult> sizes;
@@ -606,6 +708,8 @@ LogicalResult lowerSliceScatter(Operation *op, OpBuilder &builder,
   if (limit > size)
     limit = size;
   int64_t count = limit > begin ? (limit - begin + *step - 1) / *step : 0;
+  if (count == 0)
+    begin = 0;
   for (int64_t index : llvm::seq<int64_t>(0, selfType.getRank())) {
     int64_t expected = index == axis ? count : selfType.getDimSize(index);
     if (srcType.getDimSize(index) != expected)
@@ -861,6 +965,30 @@ LogicalResult lowerFloor(Operation *op, OpBuilder &builder, Value context) {
 
 LogicalResult lowerLog(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTyped<hip::LogOp>(op, builder, context, "aten.log");
+}
+
+LogicalResult lowerLog1p(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType) || !isa<FloatType>(resultType->getElementType()))
+    return op->emitError("aten.log1p requires a float result");
+  Location loc = op->getLoc();
+  auto scalarType = RankedTensorType::get({}, resultType->getElementType());
+  Value one = arith::ConstantOp::create(
+      builder, loc,
+      DenseElementsAttr::get(
+          scalarType, builder.getFloatAttr(scalarType.getElementType(), 1.0)));
+  FailureOr<Value> shifted =
+      hip::emitElementwise(builder, loc, context, op->getOperand(0), one,
+                           *resultType, hip::ElementwiseKind::Add);
+  if (failed(shifted))
+    return op->emitError("aten.log1p add failed");
+  FailureOr<Value> logged =
+      unaryHip<hip::LogOp>(builder, loc, context, *shifted, *resultType);
+  if (failed(logged))
+    return failure();
+  op->getResult(0).replaceAllUsesWith(*logged);
+  op->erase();
+  return success();
 }
 
 LogicalResult lowerSign(Operation *op, OpBuilder &builder, Value context) {
@@ -1175,6 +1303,50 @@ LogicalResult lowerPowTensorScalar(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// Same exp/log form as aten.pow.Scalar, so a negative base is undefined.
+// Before: pow.Tensor_Tensor %base : tensor<f32>, %e : tensor<16xsi32>
+// After:  hip.exp(hip.mul(hip.cast(%e) : tensor<16xf32>, hip.log(%base)))
+LogicalResult lowerPowTensorTensor(Operation *op, OpBuilder &builder,
+                                   Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  Type element = resultType->getElementType();
+  if (!isa<FloatType>(element))
+    return op->emitError("aten.pow.Tensor_Tensor requires a float result");
+  auto baseType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto exponentType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  if (!baseType || !exponentType || !baseType.hasStaticShape() ||
+      !exponentType.hasStaticShape())
+    return op->emitError("aten.pow.Tensor_Tensor requires static operands");
+  Location loc = op->getLoc();
+  auto floatBaseType = RankedTensorType::get(baseType.getShape(), element);
+  auto floatExponentType =
+      RankedTensorType::get(exponentType.getShape(), element);
+  FailureOr<Value> base =
+      hipCast(builder, loc, context, op->getOperand(0), floatBaseType);
+  FailureOr<Value> exponent =
+      hipCast(builder, loc, context, op->getOperand(1), floatExponentType);
+  if (failed(base) || failed(exponent))
+    return op->emitError("aten.pow.Tensor_Tensor cannot cast its operands");
+  FailureOr<Value> logged =
+      unaryHip<hip::LogOp>(builder, loc, context, *base, floatBaseType);
+  if (failed(logged))
+    return failure();
+  FailureOr<Value> product =
+      hip::emitElementwise(builder, loc, context, *exponent, *logged,
+                           *resultType, hip::ElementwiseKind::Mul);
+  if (failed(product))
+    return op->emitError("aten.pow.Tensor_Tensor product failed");
+  FailureOr<Value> raised =
+      unaryHip<hip::ExpOp>(builder, loc, context, *product, *resultType);
+  if (failed(raised))
+    return failure();
+  op->getResult(0).replaceAllUsesWith(*raised);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerIntBool(Operation *op, OpBuilder &builder,
                            Value /*context*/) {
   Value extended = arith::ExtUIOp::create(
@@ -1209,6 +1381,148 @@ LogicalResult lowerGeScalar(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// A bool mask over the leading dims keeps the rows where it is true. The
+// row count is data-dependent: hip.nonzero counts it on device and
+// hip.readback_dim sizes the destination, as for ONNX Compress.
+// Before: index %x[%mask] : tensor<1x16x1024>, tensor<1x16xi1>
+//           -> tensor<?x1024>
+// After:  hip.compress axis 0 of tensor<16x1024> by tensor<16xi1>
+LogicalResult lowerMaskIndex(Operation *op, OpBuilder &builder, Value context,
+                             Value mask) {
+  auto dataType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto maskType = cast<RankedTensorType>(mask.getType());
+  FailureOr<RankedTensorType> resultType = dynamicResultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  int64_t maskRank = maskType.getRank();
+  if (!dataType || !dataType.hasStaticShape() || !maskType.hasStaticShape() ||
+      maskRank == 0 || maskRank > dataType.getRank() ||
+      dataType.getShape().take_front(maskRank) != maskType.getShape())
+    return op->emitError(
+        "aten.index.Tensor bool mask must match the static leading dims");
+  SmallVector<int64_t> suffix(dataType.getShape().drop_front(maskRank));
+  SmallVector<int64_t> expected = {ShapedType::kDynamic};
+  expected.append(suffix);
+  if (resultType->getShape() != ArrayRef<int64_t>(expected) ||
+      resultType->getElementType() != dataType.getElementType())
+    return op->emitError("aten.index.Tensor bool mask result does not match");
+  Location loc = op->getLoc();
+  int64_t rows = maskType.getNumElements();
+  SmallVector<int64_t> flatShape = {rows};
+  flatShape.append(suffix);
+  auto flatType = RankedTensorType::get(flatShape, dataType.getElementType());
+  auto flatMaskType = RankedTensorType::get({rows}, maskType.getElementType());
+  Value flatData =
+      tensor::ReshapeOp::create(builder, loc, flatType, op->getOperand(0),
+                                i64Vector(builder, loc, flatShape))
+          .getResult();
+  Value flatMask = tensor::ReshapeOp::create(builder, loc, flatMaskType, mask,
+                                             i64Vector(builder, loc, {rows}))
+                       .getResult();
+  auto indicesType = RankedTensorType::get({1, rows}, builder.getI64Type());
+  auto countType = RankedTensorType::get({}, builder.getI32Type());
+  Value indicesInit = tensor::EmptyOp::create(
+      builder, loc, indicesType.getShape(), indicesType.getElementType());
+  Value countInit = tensor::EmptyOp::create(builder, loc, countType.getShape(),
+                                            countType.getElementType());
+  auto scan = hip::NonZeroOp::create(
+      builder, loc, TypeRange{indicesType, countType}, context, flatMask,
+      indicesInit, countInit,
+      builder.getI64IntegerAttr(HIPDNN_EP_DATATYPE_INT8));
+  Value count = hip::ReadbackDimOp::create(builder, loc, builder.getIndexType(),
+                                           context, scan.getResult(1))
+                    .getResult();
+  Value init =
+      tensor::EmptyOp::create(builder, loc, resultType->getShape(),
+                              resultType->getElementType(), ValueRange{count});
+  Value selected = hip::CompressOp::create(
+                       builder, loc, context, flatData, flatMask, init,
+                       builder.getI64IntegerAttr(0), builder.getBoolAttr(false))
+                       ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(selected);
+  op->erase();
+  return success();
+}
+
+// Before: index_select %table, 0, %ids : tensor<1026x1024>, tensor<16xsi64>
+// After:  hip.gather axis = 0 -> tensor<16x1024>
+LogicalResult lowerIndexSelect(Operation *op, OpBuilder &builder,
+                               Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto dataType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto indexType = dyn_cast<RankedTensorType>(op->getOperand(2).getType());
+  if (!dataType || !indexType || !dataType.hasStaticShape() ||
+      !indexType.hasStaticShape() || indexType.getRank() > 1)
+    return op->emitError(
+        "aten.index_select requires a static 0-D or 1-D index");
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
+  if (failed(dim))
+    return op->emitError("aten.index_select dim must be constant");
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, dataType.getRank())))
+    return op->emitError("aten.index_select dim is out of range");
+  Location loc = op->getLoc();
+  // A 0-D index still keeps the selected axis with size 1.
+  auto gatherIndexType =
+      RankedTensorType::get({indexType.getNumElements()}, builder.getI64Type());
+  Value index = op->getOperand(2);
+  if (indexType.getRank() == 0) {
+    auto sameElement = RankedTensorType::get({1}, indexType.getElementType());
+    index = tensor::ReshapeOp::create(builder, loc, sameElement, index,
+                                      i64Vector(builder, loc, {1}))
+                .getResult();
+  }
+  FailureOr<Value> casted =
+      hipCast(builder, loc, context, index, gatherIndexType);
+  if (failed(casted))
+    return op->emitError("aten.index_select cannot cast its index");
+  SmallVector<int64_t> expected(dataType.getShape());
+  expected[axis] = gatherIndexType.getDimSize(0);
+  if (expected != resultType->getShape())
+    return op->emitError("aten.index_select result shape does not match");
+  FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
+  if (failed(init))
+    return failure();
+  Value gathered =
+      hip::GatherOp::create(builder, loc, context, op->getOperand(0), *casted,
+                            *init, builder.getI64IntegerAttr(axis))
+          ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(gathered);
+  op->erase();
+  return success();
+}
+
+// Integer remainder follows the divisor's sign, as hip.mod with fmod = 0.
+// A float remainder would need floor semantics that fmod does not give.
+// Before: remainder.Scalar %x, 16384 : tensor<1x16xsi64>
+// After:  hip.mod %x, dense<16384> : tensor<i64> {fmod = 0}
+LogicalResult lowerRemainderScalar(Operation *op, OpBuilder &builder,
+                                   Value context) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || !isa<IntegerType>(resultType->getElementType()) ||
+      inputType.getElementType() != resultType->getElementType())
+    return op->emitError("aten.remainder.Scalar requires an integer tensor");
+  Location loc = op->getLoc();
+  FailureOr<Value> divisor = scalarTensor(builder, loc, op->getOperand(1),
+                                          resultType->getElementType());
+  FailureOr<Value> init = emptyStatic(builder, loc, *resultType);
+  if (failed(divisor) || failed(init))
+    return op->emitError(
+        "aten.remainder.Scalar cannot materialize its divisor");
+  Value remainder =
+      hip::ModOp::create(builder, loc, context, op->getOperand(0), *divisor,
+                         *init, builder.getI64IntegerAttr(0))
+          ->getResult(0);
+  op->getResult(0).replaceAllUsesWith(remainder);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
   Operation *list = op->getOperand(1).getDefiningOp();
   if (!list || list->getName().getStringRef() != "torch.prim.ListConstruct")
@@ -1220,6 +1534,11 @@ LogicalResult lowerIndex(Operation *op, OpBuilder &builder, Value context) {
                torch::isTorchType(value.getType());
       }))
     return success();
+  if (list->getNumOperands() == 1) {
+    auto maskType = dyn_cast<RankedTensorType>(list->getOperand(0).getType());
+    if (maskType && maskType.getElementType().isInteger(1))
+      return lowerMaskIndex(op, builder, context, list->getOperand(0));
+  }
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
     return failure();
@@ -1449,8 +1768,8 @@ LogicalResult lowerSelect(Operation *op, OpBuilder &builder,
   if (failed(resultType))
     return failure();
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-  if (!inputType || !inputType.hasStaticShape())
-    return op->emitError("aten.select.int requires a static input");
+  if (!inputType)
+    return op->emitError("aten.select.int requires a ranked input");
   FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
   FailureOr<int64_t> index = readI64Scalar(op->getOperand(2));
   if (failed(dim) || failed(index))
@@ -1458,10 +1777,30 @@ LogicalResult lowerSelect(Operation *op, OpBuilder &builder,
   int64_t axis = *dim;
   if (failed(normalizeAxis(axis, inputType.getRank())))
     return op->emitError("aten.select.int dim is out of range");
-  int64_t size = inputType.getDimSize(axis);
-  int64_t chosen = *index < 0 ? *index + size : *index;
-  if (chosen < 0 || chosen >= size)
-    return op->emitError("aten.select.int index is out of range");
+  for (int64_t other : llvm::seq<int64_t>(0, inputType.getRank()))
+    if (other != axis && inputType.isDynamicDim(other))
+      return op->emitError("aten.select.int requires static unselected dims");
+  Location loc = op->getLoc();
+  OpFoldResult offset;
+  if (inputType.isDynamicDim(axis)) {
+    // A negative index counts back from the runtime extent.
+    // Before: select %x, 1, -1 : tensor<1x?x8xf32>
+    // After:  tensor.extract_slice %x[0, dim(%x, 1) - 1, 0] [1, 1, 8]
+    if (*index >= 0) {
+      offset = builder.getIndexAttr(*index);
+    } else {
+      Value extent =
+          tensor::DimOp::create(builder, loc, op->getOperand(0), axis);
+      Value back = arith::ConstantIndexOp::create(builder, loc, -*index);
+      offset = arith::SubIOp::create(builder, loc, extent, back).getResult();
+    }
+  } else {
+    int64_t size = inputType.getDimSize(axis);
+    int64_t chosen = *index < 0 ? *index + size : *index;
+    if (chosen < 0 || chosen >= size)
+      return op->emitError("aten.select.int index is out of range");
+    offset = builder.getIndexAttr(chosen);
+  }
   SmallVector<int64_t> midShape(inputType.getShape());
   midShape[axis] = 1;
   auto midType = RankedTensorType::get(midShape, inputType.getElementType());
@@ -1472,8 +1811,7 @@ LogicalResult lowerSelect(Operation *op, OpBuilder &builder,
                                     builder.getIndexAttr(1));
   for (int64_t dimSize : midShape)
     sizes.push_back(builder.getIndexAttr(dimSize));
-  offsets[axis] = builder.getIndexAttr(chosen);
-  Location loc = op->getLoc();
+  offsets[axis] = offset;
   Value sliced =
       tensor::ExtractSliceOp::create(builder, loc, midType, op->getOperand(0),
                                      offsets, sizes, strides)
@@ -2499,6 +2837,19 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.ne.Scalar", lowerNeScalar});
   rewrites.push_back({"torch.aten.neg", lowerNeg});
   rewrites.push_back({"torch.aten.pow.Tensor_Scalar", lowerPowTensorScalar});
+  rewrites.push_back({"torch.aten.pow.Tensor_Tensor", lowerPowTensorTensor});
+  rewrites.push_back({"torch.aten.log1p", lowerLog1p});
+  rewrites.push_back({"torch.aten.remainder.Scalar", lowerRemainderScalar});
+  rewrites.push_back({"torch.aten._assert_scalar", lowerAssert});
+  rewrites.push_back({"torch.aten.size.int", lowerSizeInt});
+  rewrites.push_back(
+      {"torch.aten.ge.int", lowerIntCompare<arith::CmpIPredicate::sge>});
+  rewrites.push_back(
+      {"torch.aten.le.int", lowerIntCompare<arith::CmpIPredicate::sle>});
+  rewrites.push_back(
+      {"torch.aten.eq.int", lowerIntCompare<arith::CmpIPredicate::eq>});
+  rewrites.push_back({"torch.aten.unique_consecutive", lowerUniqueConsecutive});
+  rewrites.push_back({"torch.aten.index_select", lowerIndexSelect});
   rewrites.push_back({"torch.aten.clamp", lowerClamp});
   rewrites.push_back({"torch.aten.constant_pad_nd", lowerConstantPad});
   rewrites.push_back({"torch.prims.squeeze", lowerSqueeze});

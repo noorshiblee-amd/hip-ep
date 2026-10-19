@@ -601,10 +601,59 @@ LogicalResult lowerAtenView(Operation *op, OpBuilder &builder,
   if (op->getNumOperands() != 2)
     return op->emitError("aten.view expects 2 operands");
   FailureOr<RankedTensorType> resultType = shapedResultType(op, "aten.view");
-  if (failed(resultType) || !resultType->hasStaticShape())
-    return failed(resultType)
-               ? failure()
-               : op->emitError("aten.view requires a static shape");
+  if (failed(resultType))
+    return failure();
+  if (!resultType->hasStaticShape()) {
+    // One dynamic result dim is the input element count divided by the
+    // static result dims.
+    // Before: view %x, [1, -1, 8] : tensor<?x8xf32>
+    // After:  tensor.reshape %x([1, dim(%x, 0) * 8 / 8, 8])
+    auto inputType = cast<RankedTensorType>(op->getOperand(0).getType());
+    if (resultType->getNumDynamicDims() != 1)
+      return op->emitError("aten.view supports one dynamic result dim");
+    Location loc = op->getLoc();
+    Type i64 = builder.getI64Type();
+    Value total = arith::ConstantOp::create(builder, loc, i64,
+                                            builder.getI64IntegerAttr(1));
+    for (int64_t index : llvm::seq<int64_t>(0, inputType.getRank())) {
+      Value size;
+      if (inputType.isDynamicDim(index)) {
+        size = arith::IndexCastOp::create(
+            builder, loc, i64,
+            tensor::DimOp::create(builder, loc, op->getOperand(0), index));
+      } else {
+        size = arith::ConstantOp::create(
+            builder, loc, i64,
+            builder.getI64IntegerAttr(inputType.getDimSize(index)));
+      }
+      total = arith::MulIOp::create(builder, loc, total, size);
+    }
+    int64_t known = 1;
+    for (int64_t dim : resultType->getShape())
+      if (!ShapedType::isDynamic(dim))
+        known *= dim;
+    if (known == 0)
+      return op->emitError("aten.view cannot infer a dim next to a zero dim");
+    Value inferred = arith::DivSIOp::create(
+        builder, loc, total,
+        arith::ConstantOp::create(builder, loc, i64,
+                                  builder.getI64IntegerAttr(known)));
+    SmallVector<Value> dims;
+    for (int64_t dim : resultType->getShape()) {
+      dims.push_back(
+          ShapedType::isDynamic(dim)
+              ? inferred
+              : arith::ConstantOp::create(builder, loc, i64,
+                                          builder.getI64IntegerAttr(dim))
+                    .getResult());
+    }
+    Value shape = tensor::FromElementsOp::create(builder, loc, dims);
+    auto reshaped = tensor::ReshapeOp::create(builder, loc, *resultType,
+                                              op->getOperand(0), shape);
+    op->getResult(0).replaceAllUsesWith(reshaped.getResult());
+    op->erase();
+    return success();
+  }
   auto reshaped = tensor::ReshapeOp::create(
       builder, op->getLoc(), *resultType, op->getOperand(0), op->getOperand(1));
   op->getResult(0).replaceAllUsesWith(reshaped.getResult());
@@ -691,19 +740,30 @@ LogicalResult lowerAtenSum(Operation *op, OpBuilder &builder, Value context) {
     return op->emitError("aten.sum.dim_IntList expects 4 operands");
   if (!isa<torch::TorchNoneType>(op->getOperand(3).getType()))
     return op->emitError("aten.sum.dim_IntList dtype must be none");
-  FailureOr<RankedTensorType> resultType =
-      shapedResultType(op, "aten.sum.dim_IntList");
-  if (failed(resultType))
-    return failure();
-  Type element = resultType->getElementType();
+  FailureOr<Type> builtinResult =
+      torch::toBuiltinType(op->getResult(0).getType());
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (failed(builtinResult) || !isa<RankedTensorType>(*builtinResult) ||
+      !inputType)
+    return op->emitError("aten.sum.dim_IntList requires ranked tensors");
+  auto resultType = cast<RankedTensorType>(*builtinResult);
+  Type element = resultType.getElementType();
   if (!element.isF16() && !element.isF32() && !element.isBF16() &&
       !element.isInteger(32) && !element.isInteger(64)) {
     return op->emitError("aten.sum.dim_IntList result element type must be "
                          "f16, f32, bf16, i32, or i64");
   }
-  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-  if (!inputType || inputType.getElementType() != element)
-    return op->emitError("aten.sum.dim_IntList requires a ranked input");
+  // A bool or narrow integer sum accumulates in the promoted result type.
+  // Before: sum %mask : tensor<1x16xi1> -> tensor<1xi64>
+  // After:  hip.reduce_sum(hip.cast %mask to tensor<1x16xi64>)
+  Value input = op->getOperand(0);
+  if (inputType.getElementType() != element) {
+    FailureOr<Value> casted =
+        hip::castToElementType(builder, op->getLoc(), context, input, element);
+    if (failed(casted))
+      return op->emitError("aten.sum.dim_IntList cannot cast its input");
+    input = *casted;
+  }
   FailureOr<bool> keepdim = readI1Scalar(op->getOperand(2));
   if (failed(keepdim))
     return op->emitError(
@@ -721,11 +781,11 @@ LogicalResult lowerAtenSum(Operation *op, OpBuilder &builder, Value context) {
                                         builder.getI64Type());
   Value axesValue = arith::ConstantOp::create(
       builder, op->getLoc(), DenseIntElementsAttr::get(axesType, *axes));
-  FailureOr<Value> init = emptyStaticTensor(builder, op->getLoc(), *resultType);
+  FailureOr<Value> init = emptyStaticTensor(builder, op->getLoc(), resultType);
   if (failed(init))
     return op->emitError("aten.sum.dim_IntList requires a static result shape");
   auto reduced = hip::ReduceSumOp::create(
-      builder, op->getLoc(), context, op->getOperand(0), axesValue, *init,
+      builder, op->getLoc(), context, input, axesValue, *init,
       builder.getI64IntegerAttr(*keepdim ? 1 : 0),
       builder.getI64IntegerAttr(0));
   op->getResult(0).replaceAllUsesWith(reduced->getResult(0));

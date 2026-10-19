@@ -465,10 +465,60 @@ def AtenCosOp : Torch_Op<"aten.cos", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenAssertScalarOp : Torch_Op<"aten._assert_scalar"> {
+  let summary = "Dropped runtime scalar assertion";
+  let arguments = (ins AnyType:$self, AnyType:$message);
+}
+
+def AtenSizeIntOp : Torch_Op<"aten.size.int", [Pure]> {
+  let summary = "Size of one tensor dimension";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim);
+  let results = (outs IntType:$result);
+}
+
+def AtenGeIntOp : Torch_Op<"aten.ge.int", [Pure]> {
+  let summary = "Integer scalar a >= b";
+  let arguments = (ins IntType:$a, IntType:$b);
+  let results = (outs TorchBoolType:$result);
+}
+
+def AtenLeIntOp : Torch_Op<"aten.le.int", [Pure]> {
+  let summary = "Integer scalar a <= b";
+  let arguments = (ins IntType:$a, IntType:$b);
+  let results = (outs TorchBoolType:$result);
+}
+
+def AtenEqIntOp : Torch_Op<"aten.eq.int", [Pure]> {
+  let summary = "Integer scalar a == b";
+  let arguments = (ins IntType:$a, IntType:$b);
+  let results = (outs TorchBoolType:$result);
+}
+
+def AtenUniqueConsecutiveOp : Torch_Op<"aten.unique_consecutive", [Pure]> {
+  let summary = "Collapse runs of equal values";
+  let arguments = (ins
+    ValueTensorType:$self,
+    TorchBoolType:$return_inverse,
+    TorchBoolType:$return_counts,
+    AnyType:$dim
+  );
+  let results = (outs
+    ValueTensorType:$result,
+    ValueTensorType:$inverse,
+    ValueTensorType:$counts
+  );
+}
+
 def AtenIntBoolOp : Torch_Op<"aten.Int.bool", [Pure]> {
   let summary = "Bool scalar to integer scalar";
   let arguments = (ins TorchBoolType:$a);
   let results = (outs IntType:$result);
+}
+
+def AtenRemainderScalarOp : Torch_Op<"aten.remainder.Scalar", [Pure]> {
+  let summary = "Elementwise remainder whose sign follows the divisor";
+  let arguments = (ins ValueTensorType:$self, AnyType:$other);
+  let results = (outs ValueTensorType:$result);
 }
 
 def AtenGeScalarOp : Torch_Op<"aten.ge.Scalar", [Pure]> {
@@ -480,6 +530,12 @@ def AtenGeScalarOp : Torch_Op<"aten.ge.Scalar", [Pure]> {
 def AtenIndexTensorOp : Torch_Op<"aten.index.Tensor", [Pure]> {
   let summary = "Index with a list of index tensors";
   let arguments = (ins ValueTensorType:$self, ListType:$indices);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenIndexSelectOp : Torch_Op<"aten.index_select", [Pure]> {
+  let summary = "Select entries along one dimension with a 1-D index";
+  let arguments = (ins ValueTensorType:$self, IntType:$dim, ValueTensorType:$index);
   let results = (outs ValueTensorType:$result);
 }
 
@@ -603,6 +659,12 @@ def AtenPowTensorScalarOp : Torch_Op<"aten.pow.Tensor_Scalar", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenPowTensorTensorOp : Torch_Op<"aten.pow.Tensor_Tensor", [Pure]> {
+  let summary = "Raise a tensor to an elementwise tensor power";
+  let arguments = (ins ValueTensorType:$self, ValueTensorType:$exponent);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenSubScalarOp : Torch_Op<"aten.sub.Scalar", [Pure]> {
   let summary = "Subtract a scalar with alpha";
   let arguments = (ins ValueTensorType:$self, AnyType:$other, AnyType:$alpha);
@@ -665,6 +727,12 @@ def AtenFloorOp : Torch_Op<"aten.floor", [Pure]> {
 
 def AtenLogOp : Torch_Op<"aten.log", [Pure]> {
   let summary = "Elementwise natural logarithm";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenLog1pOp : Torch_Op<"aten.log1p", [Pure]> {
+  let summary = "Elementwise log(1 + x)";
   let arguments = (ins ValueTensorType:$self);
   let results = (outs ValueTensorType:$result);
 }
