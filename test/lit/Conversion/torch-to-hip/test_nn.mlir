@@ -58,6 +58,36 @@ module {
     return %result : !torch.vtensor<[1,1],f32>
   }
 
+  func.func @relu6(%x: !torch.vtensor<[1,4,2,2],f32>) -> !torch.vtensor<[1,4,2,2],f32> {
+    // CHECK-LABEL: func.func @relu6
+    %lo = torch.constant.float 0.0
+    %hi = torch.constant.float 6.0
+    %y = torch.aten.hardtanh %x, %lo, %hi : !torch.vtensor<[1,4,2,2],f32>, !torch.float, !torch.float -> !torch.vtensor<[1,4,2,2],f32>
+    // CHECK: hip.max
+    // CHECK: hip.min
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,2,2],f32>
+  }
+
+  func.func @avg_pool(%x: !torch.vtensor<[1,1,4,4],f32>) -> !torch.vtensor<[1,1,2,2],f32> {
+    // CHECK-LABEL: func.func @avg_pool
+    %two = torch.constant.int 2
+    %zero = torch.constant.int 0
+    %kernel = torch.prim.ListConstruct %two, %two : (!torch.int, !torch.int) -> !torch.list<int>
+    %stride = torch.prim.ListConstruct %two, %two : (!torch.int, !torch.int) -> !torch.list<int>
+    %pad = torch.prim.ListConstruct %zero, %zero : (!torch.int, !torch.int) -> !torch.list<int>
+    %false = torch.constant.bool false
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %y = torch.aten.avg_pool2d %x, %kernel, %stride, %pad, %false, %true, %none : !torch.vtensor<[1,1,4,4],f32>, !torch.list<int>, !torch.list<int>, !torch.list<int>, !torch.bool, !torch.bool, !torch.none -> !torch.vtensor<[1,1,2,2],f32>
+    // CHECK: hip.pool
+    // CHECK-SAME: count_include_pad = 1
+    // CHECK-SAME: kernel_shape = [2, 2]
+    // CHECK-SAME: pool_mode = 0
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,1,2,2],f32>
+  }
+
   func.func @conv_transpose(%x: !torch.vtensor<[1,4,8,8],f32>, %w: !torch.vtensor<[4,2,2,2],f32>, %b: !torch.vtensor<[2],f32>) -> !torch.vtensor<[1,2,16,16],f32> {
     // CHECK-LABEL: func.func @conv_transpose
     %int0 = torch.constant.int 0
@@ -73,5 +103,21 @@ module {
     // CHECK-SAME: strides = [2, 2]
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[1,2,16,16],f32>
+  }
+
+  func.func @conv_scalar_pad(%x: !torch.vtensor<[1,1,2,2],f32>, %w: !torch.vtensor<[2,1,1,1],f32>) -> !torch.vtensor<[1,2,2,2],f32> {
+    // CHECK-LABEL: func.func @conv_scalar_pad
+    %none = torch.constant.none
+    %zero = torch.constant.int 0
+    %one = torch.constant.int 1
+    %false = torch.constant.bool false
+    %strides = torch.prim.ListConstruct %one, %one : (!torch.int, !torch.int) -> !torch.list<int>
+    %pad = torch.prim.ListConstruct %zero : (!torch.int) -> !torch.list<int>
+    %dil = torch.prim.ListConstruct %one, %one : (!torch.int, !torch.int) -> !torch.list<int>
+    %y = torch.aten.convolution %x, %w, %none, %strides, %pad, %dil, %false, %pad, %one : !torch.vtensor<[1,1,2,2],f32>, !torch.vtensor<[2,1,1,1],f32>, !torch.none, !torch.list<int>, !torch.list<int>, !torch.list<int>, !torch.bool, !torch.list<int>, !torch.int -> !torch.vtensor<[1,2,2,2],f32>
+    // CHECK: hip.conv
+    // CHECK-SAME: pads = [0, 0, 0, 0]
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,2,2],f32>
   }
 }

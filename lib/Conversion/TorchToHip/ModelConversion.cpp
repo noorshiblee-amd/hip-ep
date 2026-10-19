@@ -735,6 +735,10 @@ LogicalResult lowerSin(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTensor<hip::SinOp>(op, builder, context, "aten.sin");
 }
 
+LogicalResult lowerExp(Operation *op, OpBuilder &builder, Value context) {
+  return lowerUnaryTensor<hip::ExpOp>(op, builder, context, "aten.exp");
+}
+
 LogicalResult lowerCos(Operation *op, OpBuilder &builder, Value context) {
   return lowerUnaryTensor<hip::CosOp>(op, builder, context, "aten.cos");
 }
@@ -1871,6 +1875,48 @@ LogicalResult lowerMaxDim(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// aten.argmax keeps only the index from a top-1 reduction.
+// Before: argmax(%x : tensor<1x16xsi32>, dim = -1, keepdim = false)
+// After:  hip.top_k {axis = 1, largest = true}, then drop the size-1 axis
+LogicalResult lowerArgmax(Operation *op, OpBuilder &builder, Value context) {
+  FailureOr<RankedTensorType> indicesType = resultTensor(op, 0);
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (isa<torch::TorchNoneType>(op->getOperand(1).getType()))
+    return op->emitError("aten.argmax dim must be a constant");
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(1));
+  FailureOr<bool> keepdim = readI1Scalar(op->getOperand(2));
+  if (failed(indicesType) || !inputType || !inputType.hasStaticShape() ||
+      failed(dim) || failed(keepdim)) {
+    return op->emitError(
+        "aten.argmax requires a static tensor and a constant dim");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, inputType.getRank())))
+    return op->emitError("aten.argmax axis is out of range");
+  SmallVector<int64_t> keptShape(inputType.getShape());
+  keptShape[axis] = 1;
+  auto keptValues =
+      RankedTensorType::get(keptShape, inputType.getElementType());
+  auto keptIndices =
+      RankedTensorType::get(keptShape, indicesType->getElementType());
+  FailureOr<std::pair<Value, Value>> top =
+      emitTopK(builder, op->getLoc(), context, op->getOperand(0), /*k=*/1, axis,
+               /*largest=*/true, /*sorted=*/true, keptValues, keptIndices);
+  if (failed(top))
+    return op->emitError("aten.argmax failed");
+  Value indices = top->second;
+  if (!*keepdim) {
+    Value indexShape =
+        i64Vector(builder, op->getLoc(), indicesType->getShape());
+    indices = tensor::ReshapeOp::create(builder, op->getLoc(), *indicesType,
+                                        indices, indexShape)
+                  .getResult();
+  }
+  op->getResult(0).replaceAllUsesWith(indices);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerListUnpack(Operation *op, OpBuilder &builder,
                               Value /*context*/) {
   Operation *split = op->getOperand(0).getDefiningOp();
@@ -2327,6 +2373,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.cat", lowerCat});
   rewrites.push_back({"torch.aten.cumsum", lowerCumsum});
   rewrites.push_back({"torch.aten.sin", lowerSin});
+  rewrites.push_back({"torch.aten.exp", lowerExp});
   rewrites.push_back({"torch.aten.cos", lowerCos});
   rewrites.push_back({"torch.aten.Int.bool", lowerIntBool});
   rewrites.push_back({"torch.aten.ge.Scalar", lowerGeScalar});
@@ -2367,6 +2414,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.gt.Tensor", lowerGtTensor});
   rewrites.push_back({"torch.aten.minimum", lowerMinimum});
   rewrites.push_back({"torch.aten.max.dim", lowerMaxDim});
+  rewrites.push_back({"torch.aten.argmax", lowerArgmax});
   rewrites.push_back({"torch.aten.topk", lowerTopk});
   rewrites.push_back({"torch.prim.ListUnpack", lowerListUnpack});
 }

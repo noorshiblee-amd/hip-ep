@@ -337,6 +337,25 @@ module {
     return %indices : !torch.vtensor<[2],si64>
   }
 
+  func.func @argmax(%x: !torch.vtensor<[1,16],si32>) -> !torch.vtensor<[1],si64> {
+    // CHECK-LABEL: func.func @argmax
+    %dim = torch.constant.int -1
+    %keep = torch.constant.bool false
+    %indices = torch.aten.argmax %x, %dim, %keep : !torch.vtensor<[1,16],si32>, !torch.int, !torch.bool -> !torch.vtensor<[1],si64>
+    // CHECK: hip.top_k
+    // CHECK: tensor.reshape
+    // CHECK-NOT: torch.
+    return %indices : !torch.vtensor<[1],si64>
+  }
+
+  func.func @exp(%x: !torch.vtensor<[],f32>) -> !torch.vtensor<[],f32> {
+    // CHECK-LABEL: func.func @exp
+    %y = torch.aten.exp %x : !torch.vtensor<[],f32> -> !torch.vtensor<[],f32>
+    // CHECK: hip.exp
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[],f32>
+  }
+
   func.func @split_sizes(%x: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,2],f32> {
     // CHECK-LABEL: func.func @split_sizes
     %two = torch.constant.int 2

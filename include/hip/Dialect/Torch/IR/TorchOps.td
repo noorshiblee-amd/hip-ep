@@ -147,6 +147,12 @@ def AtenReluOp : Torch_Op<"aten.relu", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenHardtanhOp : Torch_Op<"aten.hardtanh", [Pure]> {
+  let summary = "Clamp each element to a scalar range";
+  let arguments = (ins ValueTensorType:$self, AnyType:$min_val, AnyType:$max_val);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenUnsqueezeOp : Torch_Op<"aten.unsqueeze", [Pure]> {
   let summary = "Insert a size-1 dimension";
   let arguments = (ins ValueTensorType:$self, IntType:$dim);
@@ -203,6 +209,20 @@ def AtenMaxPool2dOp : Torch_Op<"aten.max_pool2d", [Pure]> {
     ListType:$padding,
     ListType:$dilation,
     TorchBoolType:$ceil_mode
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAvgPool2dOp : Torch_Op<"aten.avg_pool2d", [Pure]> {
+  let summary = "2-D average pool";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ListType:$kernel_size,
+    ListType:$stride,
+    ListType:$padding,
+    TorchBoolType:$ceil_mode,
+    TorchBoolType:$count_include_pad,
+    AnyType:$divisor_override
   );
   let results = (outs ValueTensorType:$result);
 }
@@ -687,6 +707,18 @@ def AtenMaxDimOp : Torch_Op<"aten.max.dim", [Pure]> {
   let summary = "Maximum value and its index along one axis";
   let arguments = (ins ValueTensorType:$self, IntType:$dim, TorchBoolType:$keepdim);
   let results = (outs ValueTensorType:$values, ValueTensorType:$indices);
+}
+
+def AtenArgmaxOp : Torch_Op<"aten.argmax", [Pure]> {
+  let summary = "Index of the maximum along one axis";
+  let arguments = (ins ValueTensorType:$self, AnyType:$dim, TorchBoolType:$keepdim);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenExpOp : Torch_Op<"aten.exp", [Pure]> {
+  let summary = "Elementwise natural exponential";
+  let arguments = (ins ValueTensorType:$self);
+  let results = (outs ValueTensorType:$result);
 }
 
 def AtenTopkOp : Torch_Op<"aten.topk", [Pure]> {

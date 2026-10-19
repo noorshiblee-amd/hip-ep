@@ -707,6 +707,18 @@ LogicalResult lowerAtenSum(Operation *op, OpBuilder &builder, Value context) {
 
 // aten padding is one value per spatial axis and applies to both sides.
 // hip.pool / hip.conv store begin axes, then end axes.
+// A length-1 window list applies to every spatial axis.
+LogicalResult broadcastSpatial(SmallVectorImpl<int64_t> &values,
+                               int64_t spatial) {
+  if (static_cast<int64_t>(values.size()) == spatial)
+    return success();
+  if (values.size() == 1 && spatial > 1) {
+    values.assign(spatial, values[0]);
+    return success();
+  }
+  return failure();
+}
+
 LogicalResult expandSymmetricPads(ArrayRef<int64_t> padding, int64_t spatial,
                                   SmallVectorImpl<int64_t> &pads) {
   if (static_cast<int64_t>(padding.size()) != spatial)
@@ -762,6 +774,96 @@ LogicalResult lowerAtenMaxPool(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// aten.hardtanh clamps each element into [min, max].
+// Before: hardtanh(%x, 0.0, 6.0)
+// After:  hip.max(%x, 0) then hip.min(_, 6)
+LogicalResult lowerAtenHardtanh(Operation *op, OpBuilder &builder,
+                                Value context) {
+  if (op->getNumOperands() != 3)
+    return op->emitError("aten.hardtanh expects 3 operands");
+  FailureOr<RankedTensorType> resultType = floatResultType(op, "aten.hardtanh");
+  if (failed(resultType))
+    return failure();
+  Location loc = op->getLoc();
+  Type elementType = resultType->getElementType();
+  FailureOr<Value> input = hip::castToElementType(
+      builder, loc, context, op->getOperand(0), elementType);
+  if (failed(input))
+    return op->emitError("aten.hardtanh cannot cast its input");
+  FailureOr<Value> lower = hip::materializeScalarTensor(
+      builder, loc, op->getOperand(1), elementType);
+  FailureOr<Value> upper = hip::materializeScalarTensor(
+      builder, loc, op->getOperand(2), elementType);
+  if (failed(lower) || failed(upper))
+    return op->emitError("aten.hardtanh bounds must be scalars");
+  FailureOr<Value> raised =
+      hip::emitElementwise(builder, loc, context, *input, *lower, *resultType,
+                           hip::ElementwiseKind::Max);
+  if (failed(raised))
+    return op->emitError("aten.hardtanh failed");
+  FailureOr<Value> clamped =
+      hip::emitElementwise(builder, loc, context, *raised, *upper, *resultType,
+                           hip::ElementwiseKind::Min);
+  if (failed(clamped))
+    return op->emitError("aten.hardtanh failed");
+  op->getResult(0).replaceAllUsesWith(*clamped);
+  op->erase();
+  return success();
+}
+
+// aten.avg_pool2d is a window mean. divisor_override replaces that mean,
+// so only the default divisor is accepted.
+// Before: avg_pool2d kernel [2, 2], count_include_pad = true
+// After:  hip.pool {pool_mode = 0, count_include_pad = 1}
+LogicalResult lowerAtenAvgPool(Operation *op, OpBuilder &builder,
+                               Value context) {
+  if (op->getNumOperands() != 7)
+    return op->emitError("aten.avg_pool2d expects 7 operands");
+  if (!isa<torch::TorchNoneType>(op->getOperand(6).getType()))
+    return op->emitError("aten.avg_pool2d divisor_override must be none");
+  FailureOr<RankedTensorType> resultType =
+      floatResultType(op, "aten.avg_pool2d");
+  if (failed(resultType))
+    return failure();
+  FailureOr<SmallVector<int64_t>> kernel = readI64List(op->getOperand(1));
+  FailureOr<SmallVector<int64_t>> strides = readI64List(op->getOperand(2));
+  FailureOr<SmallVector<int64_t>> padding = readI64List(op->getOperand(3));
+  FailureOr<bool> ceilMode = readI1Scalar(op->getOperand(4));
+  FailureOr<bool> countIncludePad = readI1Scalar(op->getOperand(5));
+  if (failed(kernel) || failed(strides) || failed(padding) ||
+      failed(ceilMode) || failed(countIncludePad)) {
+    return op->emitError("aten.avg_pool2d window arguments must be constant");
+  }
+  int64_t spatial = static_cast<int64_t>(kernel->size());
+  SmallVector<int64_t> pads;
+  if (spatial != 2 || static_cast<int64_t>(strides->size()) != spatial ||
+      failed(expandSymmetricPads(*padding, spatial, pads))) {
+    return op->emitError("aten.avg_pool2d window ranks do not match");
+  }
+  FailureOr<Value> init = emptyStaticTensor(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return op->emitError("aten.avg_pool2d requires a static result shape");
+  SmallVector<int64_t> dilation(spatial, 1);
+  SmallVector<Value> operands = {context, op->getOperand(0), *init};
+  SmallVector<NamedAttribute> attrs = {
+      builder.getNamedAttr("pool_mode", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("kernel_shape", builder.getI64ArrayAttr(*kernel)),
+      builder.getNamedAttr("strides", builder.getI64ArrayAttr(*strides)),
+      builder.getNamedAttr("pads", builder.getI64ArrayAttr(pads)),
+      builder.getNamedAttr("dilations", builder.getI64ArrayAttr(dilation)),
+      builder.getNamedAttr("ceil_mode",
+                           builder.getI64IntegerAttr(*ceilMode ? 1 : 0)),
+      builder.getNamedAttr("storage_order", builder.getI64IntegerAttr(0)),
+      builder.getNamedAttr("count_include_pad",
+                           builder.getI64IntegerAttr(*countIncludePad ? 1 : 0)),
+      builder.getNamedAttr("p", builder.getI64IntegerAttr(2))};
+  auto pool = hip::PoolOp::create(builder, op->getLoc(), TypeRange{*resultType},
+                                  operands, attrs);
+  op->getResult(0).replaceAllUsesWith(pool.getResult(0));
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerAtenConvolution(Operation *op, OpBuilder &builder,
                                    Value context) {
   if (op->getNumOperands() != 9)
@@ -791,10 +893,11 @@ LogicalResult lowerAtenConvolution(Operation *op, OpBuilder &builder,
   for (int64_t axis : llvm::seq<int64_t>(spatial))
     kernel.push_back(weightType.getDimSize(2 + axis));
   SmallVector<int64_t> pads;
-  // Before: aten padding [ph, pw]
-  // After:  hip.conv pads [ph, pw, ph, pw]
-  if (static_cast<int64_t>(strides->size()) != spatial ||
-      static_cast<int64_t>(dilation->size()) != spatial ||
+  // Before: padding [0] on a rank-4 weight
+  // After:  hip.conv pads [0, 0, 0, 0]
+  if (failed(broadcastSpatial(*strides, spatial)) ||
+      failed(broadcastSpatial(*padding, spatial)) ||
+      failed(broadcastSpatial(*dilation, spatial)) ||
       failed(expandSymmetricPads(*padding, spatial, pads))) {
     return op->emitError(
         "aten.convolution window ranks do not match the weight");
@@ -820,7 +923,7 @@ LogicalResult lowerAtenConvolution(Operation *op, OpBuilder &builder,
     FailureOr<SmallVector<int64_t>> outputPadding =
         readI64List(op->getOperand(7));
     if (failed(outputPadding) ||
-        static_cast<int64_t>(outputPadding->size()) != spatial)
+        failed(broadcastSpatial(*outputPadding, spatial)))
       return op->emitError(
           "aten.convolution output_padding must be a constant list");
     attrs.push_back(builder.getNamedAttr(
@@ -851,6 +954,7 @@ void mlir::torch::populateTorchToHipRewrites(
   rewrites.push_back({"torch.aten.div.Tensor", lowerAtenDivTensor});
   rewrites.push_back({"torch.aten.rsqrt", lowerAtenRsqrt});
   rewrites.push_back({"torch.aten.relu", lowerAtenRelu});
+  rewrites.push_back({"torch.aten.hardtanh", lowerAtenHardtanh});
   rewrites.push_back({"torch.prim.ListConstruct", lowerListConstruct});
   rewrites.push_back({"torch.aten.unsqueeze", lowerAtenUnsqueeze});
   rewrites.push_back({"torch.aten.view", lowerAtenView});
@@ -859,6 +963,7 @@ void mlir::torch::populateTorchToHipRewrites(
   rewrites.push_back({"torch.aten.mm", lowerAtenMm});
   rewrites.push_back({"torch.aten.sum.dim_IntList", lowerAtenSum});
   rewrites.push_back({"torch.aten.max_pool2d", lowerAtenMaxPool});
+  rewrites.push_back({"torch.aten.avg_pool2d", lowerAtenAvgPool});
   rewrites.push_back({"torch.aten.convolution", lowerAtenConvolution});
   populateTorchModelRewrites(rewrites);
 }
