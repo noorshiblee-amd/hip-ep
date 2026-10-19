@@ -453,6 +453,12 @@ def AtenCatOp : Torch_Op<"aten.cat", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenRollOp : Torch_Op<"aten.roll", [Pure]> {
+  let summary = "Roll elements along axes";
+  let arguments = (ins ValueTensorType:$self, ListType:$shifts, ListType:$dims);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenCumsumOp : Torch_Op<"aten.cumsum", [Pure]> {
   let summary = "Cumulative sum";
   let arguments = (ins ValueTensorType:$self, IntType:$dim, AnyType:$dtype);

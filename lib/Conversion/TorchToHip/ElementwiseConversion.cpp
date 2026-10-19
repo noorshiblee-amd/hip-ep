@@ -151,11 +151,18 @@ LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
   auto elementType = inputType
                          ? dyn_cast<IntegerType>(inputType.getElementType())
                          : IntegerType();
+  auto valueTensor =
+      dyn_cast<torch::ValueTensorType>(op->getResult(0).getType());
   if (!inputType || !inputType.hasStaticShape() || !elementType ||
-      !supportedIntegerWidth(elementType.getWidth())) {
+      !supportedIntegerWidth(elementType.getWidth()) || !valueTensor ||
+      llvm::any_of(valueTensor.getSizes(), ShapedType::isDynamic)) {
     return op->emitError() << "integer " << name
                            << " requires a static i16, i32, or i64 tensor";
   }
+  // The result shape is the broadcast, including a rank-0 self.
+  // Before: sub tensor<i64>, tensor<4xi64> -> tensor<4xi64>
+  // After:  hip.sub
+  auto resultType = RankedTensorType::get(valueTensor.getSizes(), elementType);
   FailureOr<int64_t> alpha = readI64Scalar(op->getOperand(2));
   if (failed(alpha))
     return op->emitError() << "integer " << name << " alpha must be constant";
@@ -202,7 +209,7 @@ LogicalResult lowerIntegerAlphaBinary(Operation *op, OpBuilder &builder,
     }
   }
   FailureOr<Value> result = hip::emitElementwise(
-      builder, loc, context, op->getOperand(0), rhs, inputType, kind);
+      builder, loc, context, op->getOperand(0), rhs, resultType, kind);
   if (failed(result))
     return op->emitError() << "integer " << name << " failed";
   op->getResult(0).replaceAllUsesWith(*result);

@@ -805,6 +805,69 @@ LogicalResult lowerConvert(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// aten.roll wraps each listed axis. A positive shift moves the tail to
+// the front. Negative shifts use the positive residue modulo the axis.
+// Before: roll shifts [-1] dims [0] on tensor<4xf32>
+// After:  extract_slice of the last element and the prefix, tensor.concat
+LogicalResult lowerRoll(Operation *op, OpBuilder &builder, Value /*context*/) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType) || !resultType->hasStaticShape())
+    return op->emitError("aten.roll requires a static result");
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || !inputType.hasStaticShape())
+    return op->emitError("aten.roll requires a static input");
+  if (inputType.getShape() != resultType->getShape() ||
+      inputType.getElementType() != resultType->getElementType())
+    return op->emitError("aten.roll result must match the input type");
+  FailureOr<SmallVector<int64_t>> shifts = readI64List(op->getOperand(1));
+  FailureOr<SmallVector<int64_t>> dims = readI64List(op->getOperand(2));
+  if (failed(shifts) || failed(dims) || shifts->size() != dims->size())
+    return op->emitError("aten.roll shifts and dims must be constant lists");
+
+  Value current = op->getOperand(0);
+  RankedTensorType currentType = inputType;
+  for (auto [shift, dim] : llvm::zip(*shifts, *dims)) {
+    int64_t axis = dim;
+    if (failed(normalizeAxis(axis, currentType.getRank())))
+      return op->emitError("aten.roll dim is out of range");
+    int64_t size = currentType.getDimSize(axis);
+    if (size <= 0)
+      return op->emitError("aten.roll cannot roll an empty axis");
+    int64_t wrapped = shift % size;
+    if (wrapped < 0)
+      wrapped += size;
+    if (wrapped == 0)
+      continue;
+
+    auto sliceAlong = [&](int64_t offset, int64_t count) -> Value {
+      SmallVector<OpFoldResult> offsets(currentType.getRank(),
+                                        builder.getIndexAttr(0));
+      SmallVector<OpFoldResult> sizes;
+      SmallVector<OpFoldResult> strides(currentType.getRank(),
+                                        builder.getIndexAttr(1));
+      SmallVector<int64_t> shape(currentType.getShape());
+      shape[axis] = count;
+      for (int64_t index : llvm::seq<int64_t>(0, currentType.getRank()))
+        sizes.push_back(builder.getIndexAttr(shape[index]));
+      offsets[axis] = builder.getIndexAttr(offset);
+      auto slicedType =
+          RankedTensorType::get(shape, currentType.getElementType());
+      return tensor::ExtractSliceOp::create(builder, op->getLoc(), slicedType,
+                                            current, offsets, sizes, strides)
+          .getResult();
+    };
+    Value tail = sliceAlong(size - wrapped, wrapped);
+    Value head = sliceAlong(0, size - wrapped);
+    current = tensor::ConcatOp::create(builder, op->getLoc(), axis,
+                                       ValueRange{tail, head})
+                  .getResult();
+    currentType = cast<RankedTensorType>(current.getType());
+  }
+  op->getResult(0).replaceAllUsesWith(current);
+  op->erase();
+  return success();
+}
+
 // A zero-element input contributes no values, and its rank may have
 // collapsed. The concat axis is resolved against the result rank.
 // Before: cat([tensor<0xf32>, %x : tensor<1x2x3x4xf32>], dim = -2)
@@ -2838,6 +2901,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten.empty_strided", lowerEmpty});
   rewrites.push_back({"torch.prims.convert_element_type", lowerConvert});
   rewrites.push_back({"torch.aten.cat", lowerCat});
+  rewrites.push_back({"torch.aten.roll", lowerRoll});
   rewrites.push_back({"torch.aten.cumsum", lowerCumsum});
   rewrites.push_back({"torch.aten.sin", lowerSin});
   rewrites.push_back({"torch.aten.exp", lowerExp});

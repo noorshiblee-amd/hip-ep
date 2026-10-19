@@ -678,4 +678,31 @@ module {
     // CHECK-NOT: torch.
     return %y : !torch.vtensor<[2,2],f32>
   }
+
+  func.func @sub_i64_rank0(%x: !torch.vtensor<[4],si64>) -> !torch.vtensor<[4],si64> {
+    // CHECK-LABEL: func.func @sub_i64_rank0
+    %n = torch.constant.int 63
+    %scalar = torch.prim.NumToTensor.Scalar %n : !torch.int -> !torch.vtensor<[],si64>
+    %one = torch.constant.int 1
+    %y = torch.aten.sub.Tensor %scalar, %x, %one : !torch.vtensor<[],si64>, !torch.vtensor<[4],si64>, !torch.int -> !torch.vtensor<[4],si64>
+    // CHECK: hip.sub
+    // CHECK-SAME: tensor<4xi64>
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[4],si64>
+  }
+
+  func.func @roll(%x: !torch.vtensor<[1,4,4],f32>) -> !torch.vtensor<[1,4,4],f32> {
+    // CHECK-LABEL: func.func @roll
+    %shift0 = torch.constant.int -1
+    %shift1 = torch.constant.int 1
+    %shifts = torch.prim.ListConstruct %shift0, %shift1 : (!torch.int, !torch.int) -> !torch.list<int>
+    %dim0 = torch.constant.int 1
+    %dim1 = torch.constant.int 2
+    %dims = torch.prim.ListConstruct %dim0, %dim1 : (!torch.int, !torch.int) -> !torch.list<int>
+    %y = torch.aten.roll %x, %shifts, %dims : !torch.vtensor<[1,4,4],f32>, !torch.list<int>, !torch.list<int> -> !torch.vtensor<[1,4,4],f32>
+    // CHECK: tensor.extract_slice
+    // CHECK: tensor.concat
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,4,4],f32>
+  }
 }
