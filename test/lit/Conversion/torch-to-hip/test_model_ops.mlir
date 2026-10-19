@@ -192,6 +192,52 @@ module {
     return %y : !torch.vtensor<[1,4,4,4],f32>
   }
 
+  func.func @slice_scatter(%base: !torch.vtensor<[197,197],si64>, %src: !torch.vtensor<[196,197],si64>) -> !torch.vtensor<[197,197],si64> {
+    // CHECK-LABEL: func.func @slice_scatter
+    %dim = torch.constant.int 0
+    %start = torch.constant.int 1
+    %end = torch.constant.int 9223372036854775807
+    %step = torch.constant.int 1
+    %y = torch.aten.slice_scatter %base, %src, %dim, %start, %end, %step : !torch.vtensor<[197,197],si64>, !torch.vtensor<[196,197],si64>, !torch.int, !torch.int, !torch.int, !torch.int -> !torch.vtensor<[197,197],si64>
+    // CHECK: tensor.insert_slice
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[197,197],si64>
+  }
+
+  func.func @permute_i64(%x: !torch.vtensor<[2,3,4],si64>) -> !torch.vtensor<[3,4,2],si64> {
+    // CHECK-LABEL: func.func @permute_i64
+    %c1 = torch.constant.int 1
+    %c2 = torch.constant.int 2
+    %c0 = torch.constant.int 0
+    %perm = torch.prim.ListConstruct %c1, %c2, %c0 : (!torch.int, !torch.int, !torch.int) -> !torch.list<int>
+    %y = torch.aten.permute %x, %perm : !torch.vtensor<[2,3,4],si64>, !torch.list<int> -> !torch.vtensor<[3,4,2],si64>
+    // CHECK: hip.transpose
+    // CHECK-SAME: perm = [1, 2, 0]
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[3,4,2],si64>
+  }
+
+  func.func @unsqueeze_rank0(%x: !torch.vtensor<[],si64>) -> !torch.vtensor<[1],si64> {
+    // CHECK-LABEL: func.func @unsqueeze_rank0
+    %c0 = torch.constant.int 0
+    %y = torch.aten.unsqueeze %x, %c0 : !torch.vtensor<[],si64>, !torch.int -> !torch.vtensor<[1],si64>
+    // CHECK: tensor.reshape
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1],si64>
+  }
+
+  func.func @sum_i64(%x: !torch.vtensor<[2,3,4],si64>) -> !torch.vtensor<[2,3],si64> {
+    // CHECK-LABEL: func.func @sum_i64
+    %cm1 = torch.constant.int -1
+    %dims = torch.prim.ListConstruct %cm1 : (!torch.int) -> !torch.list<int>
+    %false = torch.constant.bool false
+    %none = torch.constant.none
+    %y = torch.aten.sum.dim_IntList %x, %dims, %false, %none : !torch.vtensor<[2,3,4],si64>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,3],si64>
+    // CHECK: hip.reduce_sum
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[2,3],si64>
+  }
+
   func.func @l2_norm(%x: !torch.vtensor<[1,4],f32>) -> !torch.vtensor<[1,1],f32> {
     // CHECK-LABEL: func.func @l2_norm
     %two = torch.constant.int 2

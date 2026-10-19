@@ -568,6 +568,68 @@ LogicalResult lowerSlice(Operation *op, OpBuilder &builder, Value /*context*/) {
   return success();
 }
 
+// slice_scatter writes src into one window of self. A huge end is the
+// open bound, same as slice.Tensor.
+// Before: slice_scatter dim 0, start 1, on tensor<197x197xsi64>
+// After:  tensor.insert_slice offsets [1, 0] sizes [196, 197]
+LogicalResult lowerSliceScatter(Operation *op, OpBuilder &builder,
+                                Value /*context*/) {
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto selfType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto srcType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
+  if (!selfType || !srcType || !selfType.hasStaticShape() ||
+      !srcType.hasStaticShape() || selfType.getRank() != srcType.getRank() ||
+      selfType.getShape() != resultType->getShape()) {
+    return op->emitError(
+        "aten.slice_scatter requires static same-rank tensors");
+  }
+  FailureOr<int64_t> dim = readI64Scalar(op->getOperand(2));
+  FailureOr<int64_t> start = readI64Scalar(op->getOperand(3));
+  FailureOr<int64_t> end = readI64Scalar(op->getOperand(4));
+  FailureOr<int64_t> step = readI64Scalar(op->getOperand(5));
+  if (failed(dim) || failed(start) || failed(end) || failed(step) ||
+      *step <= 0) {
+    return op->emitError("aten.slice_scatter bounds must be constant");
+  }
+  int64_t axis = *dim;
+  if (failed(normalizeAxis(axis, selfType.getRank())))
+    return op->emitError("aten.slice_scatter dim is out of range");
+  int64_t size = selfType.getDimSize(axis);
+  int64_t begin = *start < 0 ? *start + size : *start;
+  int64_t limit = *end < 0 ? *end + size : *end;
+  if (begin < 0)
+    begin = 0;
+  if (begin > size)
+    begin = size;
+  if (limit > size)
+    limit = size;
+  int64_t count = limit > begin ? (limit - begin + *step - 1) / *step : 0;
+  for (int64_t index : llvm::seq<int64_t>(0, selfType.getRank())) {
+    int64_t expected = index == axis ? count : selfType.getDimSize(index);
+    if (srcType.getDimSize(index) != expected)
+      return op->emitError("aten.slice_scatter source shape does not match");
+  }
+  if (srcType.getElementType() != resultType->getElementType())
+    return op->emitError("aten.slice_scatter source element type must match");
+  SmallVector<OpFoldResult> offsets(selfType.getRank(),
+                                    builder.getIndexAttr(0));
+  SmallVector<OpFoldResult> sizes;
+  SmallVector<OpFoldResult> strides(selfType.getRank(),
+                                    builder.getIndexAttr(1));
+  for (int64_t dimSize : srcType.getShape())
+    sizes.push_back(builder.getIndexAttr(dimSize));
+  offsets[axis] = builder.getIndexAttr(begin);
+  strides[axis] = builder.getIndexAttr(*step);
+  auto inserted =
+      tensor::InsertSliceOp::create(builder, op->getLoc(), op->getOperand(1),
+                                    op->getOperand(0), offsets, sizes, strides);
+  op->getResult(0).replaceAllUsesWith(inserted.getResult());
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerUpsample(Operation *op, OpBuilder &builder, Value context) {
   FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
   if (failed(resultType))
@@ -2405,6 +2467,7 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.aten._assert_tensor_metadata", lowerAssert});
   rewrites.push_back({"torch.aten.arange.start_step", lowerArange});
   rewrites.push_back({"torch.aten.slice.Tensor", lowerSlice});
+  rewrites.push_back({"torch.aten.slice_scatter", lowerSliceScatter});
   rewrites.push_back({"torch.aten.upsample_nearest2d.vec", lowerUpsample});
   rewrites.push_back({"torch.aten.bitwise_and.Tensor", lowerBitwiseAnd});
   rewrites.push_back({"torch.aten.empty_strided", lowerEmpty});

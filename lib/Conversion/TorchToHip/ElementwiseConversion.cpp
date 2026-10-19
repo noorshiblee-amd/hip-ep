@@ -542,7 +542,7 @@ LogicalResult lowerAtenUnsqueeze(Operation *op, OpBuilder &builder,
   if (failed(resultType))
     return failure();
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-  if (!inputType || !inputType.hasStaticShape() || inputType.getRank() == 0)
+  if (!inputType || !inputType.hasStaticShape())
     return op->emitError("aten.unsqueeze requires a static ranked input");
   FailureOr<int64_t> axis = readI64Scalar(op->getOperand(1));
   if (failed(axis))
@@ -550,6 +550,22 @@ LogicalResult lowerAtenUnsqueeze(Operation *op, OpBuilder &builder,
   int64_t normalized = *axis;
   if (failed(normalizeAxis(normalized, inputType.getRank() + 1)))
     return op->emitError("aten.unsqueeze dim is out of range");
+  // A rank-0 tensor has no axis to group with the inserted size-1 axis.
+  // Before: unsqueeze %x, %c0 : tensor<si64> -> tensor<1xsi64>
+  // After:  tensor.reshape %x(%c1)
+  if (inputType.getRank() == 0) {
+    if (normalized != 0 || resultType->getShape() != ArrayRef<int64_t>{1})
+      return op->emitError("aten.unsqueeze result shape does not match dim");
+    auto shapeType = RankedTensorType::get({1}, builder.getI64Type());
+    Value shape = arith::ConstantOp::create(
+        builder, op->getLoc(),
+        DenseIntElementsAttr::get(shapeType, ArrayRef<int64_t>{1}));
+    auto reshaped = tensor::ReshapeOp::create(
+        builder, op->getLoc(), *resultType, op->getOperand(0), shape);
+    op->getResult(0).replaceAllUsesWith(reshaped.getResult());
+    op->erase();
+    return success();
+  }
 
   SmallVector<ReassociationIndices> reassociation;
   if (normalized == 0) {
@@ -600,9 +616,15 @@ LogicalResult lowerAtenPermute(Operation *op, OpBuilder &builder,
                                Value context) {
   if (op->getNumOperands() != 2)
     return op->emitError("aten.permute expects 2 operands");
-  FailureOr<RankedTensorType> resultType = floatResultType(op, "aten.permute");
+  FailureOr<RankedTensorType> resultType = shapedResultType(op, "aten.permute");
   if (failed(resultType))
     return failure();
+  Type element = resultType->getElementType();
+  unsigned bits = element.isIntOrFloat() ? element.getIntOrFloatBitWidth() : 0;
+  if (bits != 8 && bits != 16 && bits != 32 && bits != 64) {
+    return op->emitError("aten.permute element type must be a 1, 2, 4, or "
+                         "8 byte int or float");
+  }
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
   if (!inputType || !inputType.hasStaticShape())
     return op->emitError("aten.permute requires a static ranked input");
@@ -670,11 +692,17 @@ LogicalResult lowerAtenSum(Operation *op, OpBuilder &builder, Value context) {
   if (!isa<torch::TorchNoneType>(op->getOperand(3).getType()))
     return op->emitError("aten.sum.dim_IntList dtype must be none");
   FailureOr<RankedTensorType> resultType =
-      floatResultType(op, "aten.sum.dim_IntList");
+      shapedResultType(op, "aten.sum.dim_IntList");
   if (failed(resultType))
     return failure();
+  Type element = resultType->getElementType();
+  if (!element.isF16() && !element.isF32() && !element.isBF16() &&
+      !element.isInteger(32) && !element.isInteger(64)) {
+    return op->emitError("aten.sum.dim_IntList result element type must be "
+                         "f16, f32, bf16, i32, or i64");
+  }
   auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-  if (!inputType)
+  if (!inputType || inputType.getElementType() != element)
     return op->emitError("aten.sum.dim_IntList requires a ranked input");
   FailureOr<bool> keepdim = readI1Scalar(op->getOperand(2));
   if (failed(keepdim))

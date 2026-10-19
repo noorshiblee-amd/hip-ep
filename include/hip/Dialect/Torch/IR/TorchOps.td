@@ -391,6 +391,19 @@ def AtenSliceTensorOp : Torch_Op<"aten.slice.Tensor", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenSliceScatterOp : Torch_Op<"aten.slice_scatter", [Pure]> {
+  let summary = "Write a tensor into one sliced dimension";
+  let arguments = (ins
+    ValueTensorType:$self,
+    ValueTensorType:$src,
+    IntType:$dim,
+    IntType:$start,
+    IntType:$end,
+    IntType:$step
+  );
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenUpsampleNearest2dVecOp : Torch_Op<"aten.upsample_nearest2d.vec", [Pure]> {
   let summary = "Nearest-neighbor resize; size or scales may be none";
   let arguments = (ins ValueTensorType:$self, AnyType:$output_size, AnyType:$scale_factors);
