@@ -200,6 +200,20 @@ def AtenSumDimIntListOp : Torch_Op<"aten.sum.dim_IntList", [Pure]> {
   let results = (outs ValueTensorType:$result);
 }
 
+def AtenAmaxOp : Torch_Op<"aten.amax", [Pure]> {
+  let summary = "Maximum over a list of dimensions";
+  let arguments = (ins ValueTensorType:$self, ListType:$dim,
+                       TorchBoolType:$keepdim);
+  let results = (outs ValueTensorType:$result);
+}
+
+def AtenAminOp : Torch_Op<"aten.amin", [Pure]> {
+  let summary = "Minimum over a list of dimensions";
+  let arguments = (ins ValueTensorType:$self, ListType:$dim,
+                       TorchBoolType:$keepdim);
+  let results = (outs ValueTensorType:$result);
+}
+
 def AtenMaxPool2dOp : Torch_Op<"aten.max_pool2d", [Pure]> {
   let summary = "2-D max pool";
   let arguments = (ins

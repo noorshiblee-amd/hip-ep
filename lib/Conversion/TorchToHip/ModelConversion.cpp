@@ -516,6 +516,39 @@ LogicalResult lowerAllDim(Operation *op, OpBuilder &builder, Value context) {
   return success();
 }
 
+// An empty dim list reduces every axis.
+template <typename ReduceOp>
+LogicalResult lowerAmaxAmin(Operation *op, OpBuilder &builder, Value context) {
+  StringRef name = op->getName().getStringRef();
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType)
+    return op->emitError() << name << " requires a ranked input";
+  FailureOr<SmallVector<int64_t>> dims = readI64List(op->getOperand(1));
+  FailureOr<bool> keepdim = readI1Scalar(op->getOperand(2));
+  if (failed(dims) || failed(keepdim))
+    return op->emitError() << name << " dims and keepdim must be constant";
+  SmallVector<int64_t> axes = *dims;
+  if (axes.empty())
+    axes = llvm::to_vector(llvm::seq<int64_t>(0, inputType.getRank()));
+  for (int64_t &axis : axes)
+    if (failed(normalizeAxis(axis, inputType.getRank())))
+      return op->emitError() << name << " dim is out of range";
+  FailureOr<Value> init = emptyStatic(builder, op->getLoc(), *resultType);
+  if (failed(init))
+    return failure();
+  auto reduced =
+      ReduceOp::create(builder, op->getLoc(), context, op->getOperand(0),
+                       i64Vector(builder, op->getLoc(), axes), *init,
+                       builder.getI64IntegerAttr(*keepdim ? 1 : 0),
+                       builder.getI64IntegerAttr(0));
+  op->getResult(0).replaceAllUsesWith(reduced->getResult(0));
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerAssert(Operation *op, OpBuilder & /*builder*/,
                           Value /*context*/) {
   op->erase();
@@ -3247,11 +3280,157 @@ LogicalResult lowerFlashAttention(Operation *op, OpBuilder &builder,
   return success();
 }
 
+// PyTorch's antialiased resize weights along one axis, as an [in, out]
+// matrix: output i is the normalized filter response of the inputs within
+// `support` of center (i + 0.5) * scale. Downsampling stretches the filter.
+SmallVector<double> antialiasWeights(int64_t in, int64_t out, double scale,
+                                     bool cubic) {
+  SmallVector<double> weights(in * out, 0.0);
+  const double support = (cubic ? 2.0 : 1.0) * std::max(scale, 1.0);
+  const double invScale = scale >= 1.0 ? 1.0 / scale : 1.0;
+  auto filter = [cubic](double x) {
+    x = std::abs(x);
+    if (!cubic)
+      return x < 1.0 ? 1.0 - x : 0.0;
+    constexpr double a = -0.5;
+    if (x < 1.0)
+      return ((a + 2.0) * x - (a + 3.0)) * x * x + 1.0;
+    if (x < 2.0)
+      return (((x - 5.0) * x + 8.0) * x - 4.0) * a;
+    return 0.0;
+  };
+  for (int64_t i : llvm::seq<int64_t>(0, out)) {
+    const double center = scale * (static_cast<double>(i) + 0.5);
+    const int64_t lo =
+        std::max<int64_t>(static_cast<int64_t>(center - support + 0.5), 0);
+    const int64_t hi =
+        std::min<int64_t>(static_cast<int64_t>(center + support + 0.5), in);
+    double total = 0.0;
+    for (int64_t j : llvm::seq<int64_t>(lo, hi)) {
+      const double w =
+          filter((static_cast<double>(j) - center + 0.5) * invScale);
+      weights[j * out + i] = w;
+      total += w;
+    }
+    if (total != 0.0)
+      for (int64_t j : llvm::seq<int64_t>(lo, hi))
+        weights[j * out + i] /= total;
+  }
+  return weights;
+}
+
+// A static antialiased resize is separable, so each resized axis is one
+// matmul against a compile-time weight matrix.
+// Before: _upsample_bilinear2d_aa %x : [N,C,H,W] -> [N,C,OH,OW]
+// After:  reshape [N*C*H,W] x Ww[W,OW] -> transpose [N,C,OW,H]
+//         -> reshape [N*C*OW,H] x Wh[H,OH] -> transpose [N,C,OH,OW]
+LogicalResult lowerUpsampleAntialias(Operation *op, OpBuilder &builder,
+                                     Value context, bool cubic) {
+  StringRef name = op->getAttrOfType<StringAttr>("name").getValue();
+  Location loc = op->getLoc();
+  FailureOr<RankedTensorType> resultType = resultTensor(op, 0);
+  if (failed(resultType))
+    return failure();
+  if (op->getNumOperands() != 5)
+    return op->emitError() << name << " expects 5 operands";
+  auto inputType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  if (!inputType || inputType.getRank() != 4 || !inputType.hasStaticShape() ||
+      !resultType->hasStaticShape() ||
+      !isa<FloatType>(inputType.getElementType()) ||
+      resultType->getElementType() != inputType.getElementType())
+    return op->emitError() << name << " requires static 4-D float tensors";
+  FailureOr<bool> alignCorners = readI1Scalar(op->getOperand(2));
+  if (failed(alignCorners) || *alignCorners)
+    return op->emitError() << name << " requires align_corners false";
+  ArrayRef<int64_t> inShape = inputType.getShape();
+  ArrayRef<int64_t> outShape = resultType->getShape();
+  if (inShape[0] != outShape[0] || inShape[1] != outShape[1])
+    return op->emitError() << name << " resizes only the spatial axes";
+  auto axisScale = [](Value scaleValue, int64_t in,
+                      int64_t out) -> FailureOr<double> {
+    if (isa<torch::TorchNoneType>(scaleValue.getType()))
+      return static_cast<double>(in) / static_cast<double>(out);
+    FailureOr<float> factor = readF64Scalar(scaleValue);
+    if (failed(factor) || *factor <= 0.0f)
+      return failure();
+    return 1.0 / static_cast<double>(*factor);
+  };
+  FailureOr<double> scaleH =
+      axisScale(op->getOperand(3), inShape[2], outShape[2]);
+  FailureOr<double> scaleW =
+      axisScale(op->getOperand(4), inShape[3], outShape[3]);
+  if (failed(scaleH) || failed(scaleW))
+    return op->emitError() << name << " scales must be none or positive";
+
+  Type element = inputType.getElementType();
+  auto tensorType = [&](ArrayRef<int64_t> shape) {
+    return RankedTensorType::get(shape, element);
+  };
+  auto reshape = [&](Value value, RankedTensorType type) -> Value {
+    return tensor::ReshapeOp::create(builder, loc, type, value,
+                                     i64Vector(builder, loc, type.getShape()))
+        .getResult();
+  };
+  // Resizes the last axis of a [N, C, A, in] tensor to `out`.
+  auto resizeLast = [&](Value value, int64_t rows, int64_t in, int64_t out,
+                        double scale) -> FailureOr<Value> {
+    SmallVector<Attribute> weights;
+    for (double w : antialiasWeights(in, out, scale, cubic))
+      weights.push_back(builder.getFloatAttr(element, w));
+    Value matrix = arith::ConstantOp::create(
+        builder, loc, DenseElementsAttr::get(tensorType({in, out}), weights));
+    RankedTensorType productType = tensorType({rows, out});
+    FailureOr<Value> init = emptyStatic(builder, loc, productType);
+    if (failed(init))
+      return failure();
+    SmallVector<NamedAttribute> attrs = {
+        builder.getNamedAttr("transA", builder.getI64IntegerAttr(0)),
+        builder.getNamedAttr("transB", builder.getI64IntegerAttr(0))};
+    SmallVector<Value> operands = {
+        context, reshape(value, tensorType({rows, in})), matrix, *init};
+    return hip::MatmulOp::create(builder, loc, operands, attrs).getResult(0);
+  };
+
+  const int64_t n = inShape[0], c = inShape[1];
+  const int64_t h = inShape[2], w = inShape[3];
+  const int64_t oh = outShape[2], ow = outShape[3];
+  Value current = op->getOperand(0);
+  if (w != ow) {
+    FailureOr<Value> resized = resizeLast(current, n * c * h, w, ow, *scaleW);
+    if (failed(resized))
+      return failure();
+    current = reshape(*resized, tensorType({n, c, h, ow}));
+  }
+  if (h != oh) {
+    FailureOr<Value> swapped =
+        transposeTo(builder, loc, context, current, {0, 1, 3, 2},
+                    tensorType({n, c, ow, h}));
+    if (failed(swapped))
+      return failure();
+    FailureOr<Value> resized = resizeLast(*swapped, n * c * ow, h, oh, *scaleH);
+    if (failed(resized))
+      return failure();
+    FailureOr<Value> restored = transposeTo(
+        builder, loc, context, reshape(*resized, tensorType({n, c, ow, oh})),
+        {0, 1, 3, 2}, *resultType);
+    if (failed(restored))
+      return failure();
+    current = *restored;
+  }
+  op->getResult(0).replaceAllUsesWith(current);
+  op->erase();
+  return success();
+}
+
 LogicalResult lowerTorchOperator(Operation *op, OpBuilder &builder,
                                  Value context) {
   auto name = op->getAttrOfType<StringAttr>("name");
   if (name && name.getValue() == "torch.hipdnn.qmoe")
     return lowerQuantizedMoe(op, builder, context);
+  if (name && name.getValue() == "torch.aten._upsample_bilinear2d_aa")
+    return lowerUpsampleAntialias(op, builder, context, /*cubic=*/false);
+  if (name && name.getValue() == "torch.aten._upsample_bicubic2d_aa")
+    return lowerUpsampleAntialias(op, builder, context, /*cubic=*/true);
   return lowerFlashAttention(op, builder, context);
 }
 
@@ -4045,6 +4224,8 @@ void mlir::torch::populateTorchModelRewrites(
   rewrites.push_back({"torch.operator", lowerTorchOperator});
   rewrites.push_back({"torch.aten.eq.Scalar", lowerEqScalar});
   rewrites.push_back({"torch.aten.all.dim", lowerAllDim});
+  rewrites.push_back({"torch.aten.amax", lowerAmaxAmin<hip::ReduceMaxOp>});
+  rewrites.push_back({"torch.aten.amin", lowerAmaxAmin<hip::ReduceMinOp>});
   rewrites.push_back({"torch.aten._assert_tensor_metadata", lowerAssert});
   rewrites.push_back({"torch.aten.arange.start_step", lowerArange});
   rewrites.push_back({"torch.aten.slice.Tensor", lowerSlice});

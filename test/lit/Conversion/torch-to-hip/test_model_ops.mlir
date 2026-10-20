@@ -866,6 +866,39 @@ module {
     return %y : !torch.vtensor<[2,1],f32>
   }
 
+  func.func @amax_amin(%x: !torch.vtensor<[2,4,3],f32>) -> (!torch.vtensor<[2,3],f32>, !torch.vtensor<[1,1,1],f32>) {
+    // CHECK-LABEL: func.func @amax_amin
+    %dim = torch.constant.int 1
+    %dims = torch.prim.ListConstruct %dim : (!torch.int) -> !torch.list<int>
+    %false = torch.constant.bool false
+    %true = torch.constant.bool true
+    %y = torch.aten.amax %x, %dims, %false : !torch.vtensor<[2,4,3],f32>, !torch.list<int>, !torch.bool -> !torch.vtensor<[2,3],f32>
+    // CHECK: hip.reduce_max
+    %none = torch.prim.ListConstruct  : () -> !torch.list<int>
+    %z = torch.aten.amin %x, %none, %true : !torch.vtensor<[2,4,3],f32>, !torch.list<int>, !torch.bool -> !torch.vtensor<[1,1,1],f32>
+    // CHECK: hip.reduce_min
+    // CHECK-NOT: torch.
+    return %y, %z : !torch.vtensor<[2,3],f32>, !torch.vtensor<[1,1,1],f32>
+  }
+
+  func.func @upsample_aa(%x: !torch.vtensor<[1,2,4,4],f32>) -> !torch.vtensor<[1,2,6,3],f32> {
+    // CHECK-LABEL: func.func @upsample_aa
+    %h = torch.constant.int 6
+    %w = torch.constant.int 3
+    %size = torch.prim.ListConstruct %h, %w : (!torch.int, !torch.int) -> !torch.list<int>
+    %false = torch.constant.bool false
+    %none = torch.constant.none
+    %y = torch.operator "torch.aten._upsample_bicubic2d_aa"(%x, %size, %false, %none, %none) : (!torch.vtensor<[1,2,4,4],f32>, !torch.list<int>, !torch.bool, !torch.none, !torch.none) -> !torch.vtensor<[1,2,6,3],f32>
+    // CHECK: arith.constant dense<{{.*}}> : tensor<4x3xf32>
+    // CHECK: hip.matmul
+    // CHECK: hip.transpose
+    // CHECK: arith.constant dense<{{.*}}> : tensor<4x6xf32>
+    // CHECK: hip.matmul
+    // CHECK: hip.transpose
+    // CHECK-NOT: torch.
+    return %y : !torch.vtensor<[1,2,6,3],f32>
+  }
+
   func.func @norm_scalar(%x: !torch.vtensor<[4],f32>) -> !torch.vtensor<[],f32> {
     // CHECK-LABEL: func.func @norm_scalar
     %p = torch.constant.int 2
