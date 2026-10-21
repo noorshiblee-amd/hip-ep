@@ -8,6 +8,7 @@
 #include "hip/Dialect/Hipsr/IR/HipsrDialect.h"
 #include "hip/Dialect/Hipsr/Pipelines/Pipelines.h"
 #include "hip/Dialect/IR/HipDialect.h"
+#include "hip/Dialect/Torch/IR/TorchDialect.h"
 #include "hip/Dialect/Transforms/Pipelines.h"
 #include "hip/InitAllPasses.h"
 #include "hip/Support/DiskFileSystem.h"
@@ -57,6 +58,35 @@ bool hipsrPipelineRequested() {
 OnnxDialectKind onnxDialectKind() {
   return hipsrPipelineRequested() ? OnnxDialectKind::Modeled
                                   : OnnxDialectKind::Stub;
+}
+
+bool isTorchDialect(mlir::Dialect *dialect) {
+  return dialect && dialect->getNamespace() ==
+                        mlir::torch::TorchDialect::getDialectNamespace();
+}
+
+bool isTorchType(mlir::Type type) { return isTorchDialect(&type.getDialect()); }
+
+/// Whether the parsed module is a Torch module rather than an ONNX one.
+///
+/// Matched on the dialect namespace, not on an operation list: the accepted
+/// Torch subset grows independently of this driver. A pass-through graph
+/// carries no Torch operation, only `!torch.vtensor` block arguments, so the
+/// types are inspected as well. Operand types need no separate check -- every
+/// operand is some operation's result or a block argument.
+bool moduleUsesTorch(mlir::ModuleOp module) {
+  return module
+      .walk([&](mlir::Operation *op) {
+        if (isTorchDialect(op->getDialect()) ||
+            llvm::any_of(op->getResultTypes(), isTorchType))
+          return mlir::WalkResult::interrupt();
+        for (mlir::Region &region : op->getRegions())
+          for (mlir::Block &block : region)
+            if (llvm::any_of(block.getArgumentTypes(), isTorchType))
+              return mlir::WalkResult::interrupt();
+        return mlir::WalkResult::advance();
+      })
+      .wasInterrupted();
 }
 } // namespace
 
@@ -338,6 +368,23 @@ bool CompilerDriver::runMLIRPasses(
     mlir::hipsr::buildHipsrPipeline(pm, hipsrOpts);
 
     COMPILER_DEBUG_LOG("[CompilerDriver] HIPDNN_EP_HIPSR set\n");
+  } else if (moduleUsesTorch(module)) {
+    // A Torch module bypasses the ONNX front end: buildTorchToHipPipeline
+    // inserts !hip.context, lowers the accepted Torch subset to tensor-mode
+    // HIP, then runs the same tail and the same HIP->LLVM lowering the ONNX
+    // path uses. See docs/design/torch-to-hip.md.
+    mlir::hip::OnnxToHipPipelineOptions torchToHipOpts;
+    torchToHipOpts.externalizeMinNumElements =
+        mlir::hip::kDefaultExternalizeMinNumElements;
+    torchToHipOpts.skipConstantData = options.skip_constant_data;
+    mlir::hip::buildTorchToHipPipeline(pm, torchToHipOpts, fileSystem_);
+
+    mlir::hip::HipToLLVMPipelineOptions hipToLlvmOpts;
+    hipToLlvmOpts.constantsFile = options.constants_file;
+    mlir::hip::buildHipToLLVMPipeline(pm, hipToLlvmOpts);
+
+    COMPILER_DEBUG_LOG("[CompilerDriver] Torch input: running "
+                       "torch-to-hip-pipeline instead of the ONNX front end\n");
   } else {
     mlir::hip::OnnxToHipPipelineOptions onnxToHipOpts;
     onnxToHipOpts.externalizeMinNumElements =

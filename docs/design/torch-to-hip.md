@@ -11,7 +11,13 @@ Licensed under the MIT License.
 
 ## Overview
 
-`hip-mlir-opt` accepts a backend-contract Torch module produced outside this repository and lowers the accepted subset to tensor-mode HIP IR. The shared tail then bufferizes that IR, allocates graph outputs, and pools transients. The production compiler still ingests ONNX.
+`hip-mlir-opt` accepts a backend-contract Torch module produced outside this repository and lowers the accepted subset to tensor-mode HIP IR. The shared tail then bufferizes that IR, allocates graph outputs, and pools transients.
+
+`hip-compiler` accepts the same module. `CompilerDriver` selects `torch-to-hip-pipeline` over the ONNX front end when the parsed module carries Torch IR — a Torch operation, a `!torch.*` result, or a `!torch.*` block argument — matched on the dialect namespace so the accepted subset grows without touching the driver. An ONNX module matches nothing and takes the unchanged ONNX path. A whole Torch model therefore compiles to a `.bc` or `.so` in one command:
+
+```bash
+hip-compiler model.torch.mlir -o model.bc
+```
 
 ## Design
 

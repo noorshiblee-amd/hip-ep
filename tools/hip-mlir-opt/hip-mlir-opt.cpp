@@ -86,8 +86,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
-  // Torch is a tool-side parser for an external module. The production
-  // compiler still ingests ONNX and does not load this dialect.
+  // Parser for a Torch module produced by an out-of-tree exporter.
+  // hip::compiler::registerAllDialects registers it too, so the tool and the
+  // production compiler accept the same input.
   registry.insert<mlir::torch::TorchDialect>();
   registry.insert<mlir::pdl::PDLDialect>();
   registry.insert<mlir::pdl_interp::PDLInterpDialect>();
