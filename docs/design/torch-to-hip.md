@@ -33,6 +33,12 @@ hip-to-llvm-pipeline   (optional)
 
 `torch-to-hip-pipeline` is `hip-add-context-arg`, then `convert-torch-to-hip`, then the tail of `onnx-to-hip-pipeline`. Pass names and tail order are in [pipeline_pass_menu.md](../pipeline_pass_menu.md). `hip-to-llvm-pipeline` is separate. It requires `@main_graph` when the C ABI is generated; conversion tests do not.
 
+### Entry point name
+
+torch-mlir's exporter names the graph entry `@main`; [compiler-runtime-contract.md](compiler-runtime-contract.md) spells it `@main_graph`. `convert-torch-to-hip` renames it, so a stock export needs no hand edit. Without the rename the metadata below is skipped and `generate-interface` reports a missing `@main_graph`.
+
+Only a function carrying Torch IR is renamed, and only when the module has no `@main_graph` of its own: beside one, `@main` is an ordinary helper and keeps its name. The rename goes through the symbol table, so any reference moves with the definition.
+
 ### Graph IO metadata
 
 `convert-torch-to-hip` records the graph's shapes on the module in the same six attributes `convert-onnx-to-hip` writes: `hipdnn.input_count`, `hipdnn.input_shapes`, `hipdnn.input_element_sizes`, and the three `output` counterparts. The shapes are read from the `!torch.vtensor` types, so this happens before the rewrites replace the function signature. The `!hip.context` argument is not counted as a graph input.

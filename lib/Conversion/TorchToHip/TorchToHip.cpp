@@ -14,6 +14,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -40,18 +41,24 @@ struct ConvertTorchToHipPass
   void runOnOperation() override;
 };
 
-LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
-  hasTorch = false;
+/// A function carries Torch IR when a block argument has a Torch type or the
+/// body holds a Torch operation. A pass-through graph has no Torch operation,
+/// only `!torch.vtensor` arguments, so both have to be checked.
+bool functionUsesTorch(func::FuncOp func) {
   for (BlockArgument arg : func.getArguments()) {
     if (torch::isTorchType(arg.getType()))
-      hasTorch = true;
+      return true;
   }
-  if (!hasTorch) {
-    func.walk([&](Operation *op) {
-      if (torch::isTorchDialectOp(op))
-        hasTorch = true;
-    });
-  }
+  return func
+      .walk([&](Operation *op) {
+        return torch::isTorchDialectOp(op) ? WalkResult::interrupt()
+                                           : WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+LogicalResult convertFunctionArguments(func::FuncOp func, bool &hasTorch) {
+  hasTorch = functionUsesTorch(func);
   if (!hasTorch)
     return success();
   if (func.isExternal())
@@ -222,6 +229,28 @@ LogicalResult lowerFunction(func::FuncOp func,
   return success();
 }
 
+/// Rename a Torch entry point from `@main` to `@main_graph`.
+///
+/// torch-mlir's exporter names the entry `@main`, while the compiler/runtime
+/// contract spells it `@main_graph`. Without this rewrite every Torch module
+/// needs a hand edit before the C ABI can be generated: the metadata below is
+/// skipped, and generate-interface then reports a missing @main_graph.
+///
+/// Only a function that carries Torch IR is renamed, and only when the module
+/// has no `@main_graph` already -- next to one, `@main` is an ordinary helper.
+/// The rename goes through the symbol table so any reference moves with the
+/// definition.
+static LogicalResult renameTorchEntryPoint(ModuleOp module) {
+  if (module.lookupSymbol<func::FuncOp>("main_graph"))
+    return success();
+  auto mainFunc = module.lookupSymbol<func::FuncOp>("main");
+  if (!mainFunc || !functionUsesTorch(mainFunc))
+    return success();
+  if (failed(SymbolTable(module).rename(mainFunc, "main_graph")))
+    return mainFunc.emitError("failed to rename @main to @main_graph");
+  return success();
+}
+
 /// Record the graph's input/output shapes on the module, the same six
 /// attributes convert-onnx-to-hip stamps. GenerateInterface requires them, and
 /// convert-hip-to-llvm silently skips building the (ctx, inputs) entry wrapper
@@ -299,6 +328,10 @@ void ConvertTorchToHipPass::runOnOperation() {
 
   int64_t serializationOrder = 0;
   ModuleOp module = getOperation();
+  if (failed(renameTorchEntryPoint(module))) {
+    signalPassFailure();
+    return;
+  }
   if (failed(generateModuleMetadata(module))) {
     signalPassFailure();
     return;
