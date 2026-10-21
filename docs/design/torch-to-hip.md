@@ -33,6 +33,12 @@ hip-to-llvm-pipeline   (optional)
 
 `torch-to-hip-pipeline` is `hip-add-context-arg`, then `convert-torch-to-hip`, then the tail of `onnx-to-hip-pipeline`. Pass names and tail order are in [pipeline_pass_menu.md](../pipeline_pass_menu.md). `hip-to-llvm-pipeline` is separate. It requires `@main_graph` when the C ABI is generated; conversion tests do not.
 
+### Graph IO metadata
+
+`convert-torch-to-hip` records the graph's shapes on the module in the same six attributes `convert-onnx-to-hip` writes: `hipdnn.input_count`, `hipdnn.input_shapes`, `hipdnn.input_element_sizes`, and the three `output` counterparts. The shapes are read from the `!torch.vtensor` types, so this happens before the rewrites replace the function signature. The `!hip.context` argument is not counted as a graph input.
+
+`generate-interface` requires these attributes, and `convert-hip-to-llvm` silently skips building the `(ctx, inputs) -> i32` entry wrapper without them, so a Torch module that omits them fails at `generate-interface` with a `@main_graph has wrong signature` diagnostic rather than at the missing attribute. A module with no `@main_graph` is left alone: conversion-only tests lower a bare function and never reach the C ABI.
+
 `convert-torch-to-hip` requires `!hip.context` as argument 0. `hip-add-context-arg` inserts it and does not rewrite other argument types. The pass then rewrites the function signature and the Torch operations in one step. Verifying between those two edits would reject the function, because a block argument cannot change type while a Torch operation still uses it.
 
 ### Entry contract

@@ -222,12 +222,81 @@ LogicalResult lowerFunction(func::FuncOp func,
   return success();
 }
 
+/// Record the graph's input/output shapes on the module, the same six
+/// attributes convert-onnx-to-hip stamps. GenerateInterface requires them, and
+/// convert-hip-to-llvm silently skips building the (ctx, inputs) entry wrapper
+/// without them, so the C ABI cannot be generated from a Torch module unless
+/// they are present.
+///
+/// Must run before the rewrites replace the Torch function signature: the
+/// shapes come from the `!torch.vtensor` types that the rewrites erase. A
+/// module with no @main_graph is left alone -- conversion-only tests lower a
+/// bare function and never reach the C ABI.
+static LogicalResult generateModuleMetadata(ModuleOp module) {
+  auto mainFunc = module.lookupSymbol<func::FuncOp>("main_graph");
+  if (!mainFunc)
+    return success();
+
+  FunctionType funcType = mainFunc.getFunctionType();
+  OpBuilder builder(module.getContext());
+
+  auto collect = [&](TypeRange types, SmallVectorImpl<Attribute> &shapes,
+                     SmallVectorImpl<int64_t> &elementSizes, int64_t &count,
+                     StringRef what) -> LogicalResult {
+    count = static_cast<int64_t>(types.size());
+    for (Type type : types) {
+      // hip-add-context-arg has already prepended !hip.context; it is not a
+      // graph input.
+      if (isa<hip::ContextType>(type)) {
+        --count;
+        continue;
+      }
+      FailureOr<RankedTensorType> tensorType = torch::toBuiltinTensorType(type);
+      if (failed(tensorType))
+        return mainFunc.emitError("unsupported ")
+               << what << " type in @main_graph: " << type;
+      Type elemType = tensorType->getElementType();
+      if (!elemType.isIntOrFloat())
+        return mainFunc.emitError("unsupported element type in @main_graph ")
+               << what << ": " << elemType;
+      shapes.push_back(builder.getDenseI64ArrayAttr(tensorType->getShape()));
+      elementSizes.push_back(elemType.getIntOrFloatBitWidth() / 8);
+    }
+    return success();
+  };
+
+  int64_t inputCount = 0, outputCount = 0;
+  SmallVector<Attribute> inputShapes, outputShapes;
+  SmallVector<int64_t> inputElementSizes, outputElementSizes;
+
+  if (failed(collect(funcType.getInputs(), inputShapes, inputElementSizes,
+                     inputCount, "input")) ||
+      failed(collect(funcType.getResults(), outputShapes, outputElementSizes,
+                     outputCount, "output")))
+    return failure();
+
+  module->setAttr("hipdnn.input_count", builder.getI64IntegerAttr(inputCount));
+  module->setAttr("hipdnn.input_shapes", builder.getArrayAttr(inputShapes));
+  module->setAttr("hipdnn.input_element_sizes",
+                  builder.getDenseI64ArrayAttr(inputElementSizes));
+  module->setAttr("hipdnn.output_count",
+                  builder.getI64IntegerAttr(outputCount));
+  module->setAttr("hipdnn.output_shapes", builder.getArrayAttr(outputShapes));
+  module->setAttr("hipdnn.output_element_sizes",
+                  builder.getDenseI64ArrayAttr(outputElementSizes));
+  return success();
+}
+
 void ConvertTorchToHipPass::runOnOperation() {
   SmallVector<torch::TorchRewrite> rewrites;
   torch::populateTorchToHipRewrites(rewrites);
 
   int64_t serializationOrder = 0;
   ModuleOp module = getOperation();
+  if (failed(generateModuleMetadata(module))) {
+    signalPassFailure();
+    return;
+  }
   auto result = module.walk([&](func::FuncOp func) {
     if (failed(lowerFunction(func, rewrites, serializationOrder)))
       return WalkResult::interrupt();
