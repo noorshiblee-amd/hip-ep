@@ -48,6 +48,22 @@ module {
 
 // -----
 
+// Integer token-id arguments are graph inputs too, so the element sizes come
+// from the same type conversion the rewrites use, not from the float-only
+// tensor conversion that would reject si64 outright.
+// CHECK: module attributes {
+// CHECK-SAME: hipdnn.input_count = 2 : i64
+// CHECK-SAME: hipdnn.input_element_sizes = array<i64: 8, 4>
+// CHECK-SAME: hipdnn.input_shapes = [array<i64: 1, 16>, array<i64: 1, 16>]
+// CHECK-SAME: hipdnn.output_element_sizes = array<i64: 8>
+module {
+  func.func @main_graph(%arg0: !torch.vtensor<[1,16],si64>, %arg1: !torch.vtensor<[1,16],f32>) -> !torch.vtensor<[1,16],si64> {
+    return %arg0 : !torch.vtensor<[1,16],si64>
+  }
+}
+
+// -----
+
 // A module with no @main_graph is left alone: conversion-only tests lower a
 // bare function and never reach the C ABI.
 // CHECK-NOT: hipdnn.input_count

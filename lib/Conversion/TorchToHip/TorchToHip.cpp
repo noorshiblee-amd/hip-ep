@@ -251,15 +251,21 @@ static LogicalResult generateModuleMetadata(ModuleOp module) {
         --count;
         continue;
       }
-      FailureOr<RankedTensorType> tensorType = torch::toBuiltinTensorType(type);
-      if (failed(tensorType))
+      // toBuiltinType, not toBuiltinTensorType: the latter accepts only float
+      // element types, which would reject the integer token-id and mask
+      // tensors the rewrites themselves accept as graph arguments.
+      FailureOr<Type> converted = torch::toBuiltinType(type);
+      auto tensorType = succeeded(converted)
+                            ? dyn_cast<RankedTensorType>(*converted)
+                            : nullptr;
+      if (!tensorType)
         return mainFunc.emitError("unsupported ")
                << what << " type in @main_graph: " << type;
-      Type elemType = tensorType->getElementType();
+      Type elemType = tensorType.getElementType();
       if (!elemType.isIntOrFloat())
         return mainFunc.emitError("unsupported element type in @main_graph ")
                << what << ": " << elemType;
-      shapes.push_back(builder.getDenseI64ArrayAttr(tensorType->getShape()));
+      shapes.push_back(builder.getDenseI64ArrayAttr(tensorType.getShape()));
       elementSizes.push_back(elemType.getIntOrFloatBitWidth() / 8);
     }
     return success();
