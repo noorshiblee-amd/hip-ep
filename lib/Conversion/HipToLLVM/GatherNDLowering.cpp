@@ -31,7 +31,8 @@ struct GatherNDOpLowering : public ConvertOpToLLVMPattern<GatherNDOp> {
     auto indicesType = cast<MemRefType>(op.getIndices().getType());
     auto outputType = cast<MemRefType>(op.getOutput().getType());
 
-    int64_t hipDtype = getHipdnnDataType(dataType.getElementType());
+    // GatherND only moves elements, so a bool buffer gathers as bytes.
+    int64_t hipDtype = getHipdnnDataTypeBoolAsByte(dataType.getElementType());
     if (hipDtype < 0)
       return rewriter.notifyMatchFailure(op, "unsupported data element type");
 

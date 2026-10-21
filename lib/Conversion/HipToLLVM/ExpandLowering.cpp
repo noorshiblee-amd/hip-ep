@@ -27,7 +27,8 @@ struct ExpandOpLowering : public ConvertOpToLLVMPattern<ExpandOp> {
     auto inType = cast<MemRefType>(op.getInput().getType());
     auto outType = cast<MemRefType>(op.getOutput().getType());
 
-    int64_t dataType = getHipdnnDataType(inType.getElementType());
+    // Expand only broadcasts elements, so a bool buffer expands as bytes.
+    int64_t dataType = getHipdnnDataTypeBoolAsByte(inType.getElementType());
     if (dataType < 0)
       return rewriter.notifyMatchFailure(op, "unsupported element type");
 

@@ -35,7 +35,7 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | Log | Custom HIP kernel |
 | Pow | Decomposed to Mul / Sqrt / Reciprocal for supported constant scalar exponents |
 | Sub | Custom HIP kernel |
-| Cast | Custom HIP kernel |
+| Cast | Custom HIP kernel. A bool operand uses its own runtime data type: narrowing to bool is `x != 0`, not a width truncation. Other operations treat an `i1` buffer as an unsigned byte, since it is one byte per element holding 0 or 1. |
 | CastLike | Simplified to Cast |
 | Ceil | Custom HIP kernel |
 | Round | Custom HIP kernel |

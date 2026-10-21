@@ -806,6 +806,9 @@ template <> __device__ inline int32_t reduce_init_max<int32_t>() {
 template <> __device__ inline float reduce_init_max<float>() {
   return -INFINITY;
 }
+// A bool mask is reduced as an unsigned byte: min over 0/1 is logical AND and
+// max is logical OR, which is what `aten.all` / `aten.any` need.
+template <> __device__ inline uint8_t reduce_init_max<uint8_t>() { return 0; }
 
 template <typename T> __device__ inline T reduce_init_min();
 template <> __device__ inline int64_t reduce_init_min<int64_t>() {
@@ -817,6 +820,9 @@ template <> __device__ inline int32_t reduce_init_min<int32_t>() {
 template <> __device__ inline float reduce_init_min<float>() {
   return INFINITY;
 }
+template <> __device__ inline uint8_t reduce_init_min<uint8_t>() {
+  return UINT8_MAX;
+}
 
 template <typename T>
 __device__ inline T reduce_op_prod(T a, T b) {
@@ -827,6 +833,7 @@ template <typename T> __device__ inline T reduce_init_prod();
 template <> __device__ inline int64_t reduce_init_prod<int64_t>() { return 1; }
 template <> __device__ inline int32_t reduce_init_prod<int32_t>() { return 1; }
 template <> __device__ inline float reduce_init_prod<float>() { return 1.0f; }
+template <> __device__ inline uint8_t reduce_init_prod<uint8_t>() { return 1; }
 
 // -----------------------------------------------------------------------------
 // Templated block-reduce kernel. Uses a function-pointer style template arg
@@ -1010,6 +1017,22 @@ static int hip_block_reduce_launch(void *stream, const void *data,
                        dim3(block_size), shared_mem, hip_stream,
                        static_cast<const __half *>(data),
                        static_cast<__half *>(output), reduce_size,
+                       inner_size, num_output_elements);
+    break;
+  }
+  case HIP_DTYPE_UINT8: {
+    size_t shared_mem = block_size * sizeof(uint8_t);
+    CUSTOM_KERNELS_DEBUG_LOG("[custom_kernels] hip_%s: dtype=UINT8, "
+                             "input=%lld, output=%lld, reduce_size=%lld, "
+                             "block=%d\n",
+                             op_name, (long long)num_input_elements,
+                             (long long)num_output_elements,
+                             (long long)reduce_size, block_size);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(reduce_int_kernel<uint8_t, OP>),
+                       dim3(static_cast<unsigned>(num_output_elements)),
+                       dim3(block_size), shared_mem, hip_stream,
+                       static_cast<const uint8_t *>(data),
+                       static_cast<uint8_t *>(output), reduce_size,
                        inner_size, num_output_elements);
     break;
   }

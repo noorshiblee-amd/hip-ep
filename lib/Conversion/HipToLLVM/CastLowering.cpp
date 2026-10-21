@@ -56,9 +56,18 @@ struct CastOpLowering : public ConvertOpToLLVMPattern<CastOp> {
       numElements = LLVM::MulOp::create(rewriter, loc, numElements, dimSize);
     }
 
-    // Get source and destination data type enums
-    int64_t srcDataType = getHipdnnDataType(inputType.getElementType());
-    int64_t dstDataType = getHipdnnDataType(outputType.getElementType());
+    // Get source and destination data type enums. An i1 tensor is a byte per
+    // element, but unlike the ops that just read those bytes as a mask, a cast
+    // has to know the operand is a bool: narrowing to bool is `x != 0`, not a
+    // width truncation (2.5 -> i8 is 2, but -> bool is 1). So i1 maps to its
+    // own enum value here rather than borrowing the byte slot.
+    auto castDataType = [](Type elemType) -> int64_t {
+      if (elemType.isInteger(1))
+        return HIPDNN_EP_DATATYPE_BOOL;
+      return getHipdnnDataType(elemType);
+    };
+    int64_t srcDataType = castDataType(inputType.getElementType());
+    int64_t dstDataType = castDataType(outputType.getElementType());
 
     if (srcDataType < 0 || dstDataType < 0)
       return rewriter.notifyMatchFailure(
