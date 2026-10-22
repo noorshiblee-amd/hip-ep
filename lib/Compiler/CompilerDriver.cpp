@@ -8,7 +8,6 @@
 #include "hip/Dialect/Hipsr/IR/HipsrDialect.h"
 #include "hip/Dialect/Hipsr/Pipelines/Pipelines.h"
 #include "hip/Dialect/IR/HipDialect.h"
-#include "hip/Dialect/Torch/IR/TorchDialect.h"
 #include "hip/Dialect/Transforms/Pipelines.h"
 #include "hip/InitAllPasses.h"
 #include "hip/Support/DiskFileSystem.h"
@@ -61,8 +60,9 @@ OnnxDialectKind onnxDialectKind() {
 }
 
 bool isTorchDialect(mlir::Dialect *dialect) {
-  return dialect && dialect->getNamespace() ==
-                        mlir::torch::TorchDialect::getDialectNamespace();
+  // Namespace string, not the dialect class: the class is defined by the
+  // torch_hip plugin, and this driver only has to recognize a parsed module.
+  return dialect && dialect->getNamespace() == "torch";
 }
 
 bool isTorchType(mlir::Type type) { return isTorchDialect(&type.getDialect()); }

@@ -10,7 +10,6 @@
 #include "hip/Dialect/IR/HipBufferize.h"
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Onnx/IR/OnnxDialect.h"
-#include "hip/Dialect/Torch/IR/TorchDialect.h"
 #include "hip/Dialect/Transforms/Passes.h"
 #include "hip/Dialect/Transforms/Pipelines.h"
 
@@ -86,13 +85,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
-  // Parser for a Torch module produced by an out-of-tree exporter.
-  // hip::compiler::registerAllDialects registers it too, so the tool and the
-  // production compiler accept the same input. torch_hip registers Torch-MLIR's
-  // dialect under the same name; inserting both fails.
-#ifndef HIP_EP_TORCH_FROM_PLUGIN
-  registry.insert<mlir::torch::TorchDialect>();
-#endif
+  // The torch dialect is inserted below by the torch_hip plugin registration,
+  // the same path CompilerDriver uses. A build without that plugin cannot
+  // parse Torch IR.
   registry.insert<mlir::pdl::PDLDialect>();
   registry.insert<mlir::pdl_interp::PDLInterpDialect>();
   registry.insert<mlir::ub::UBDialect>();

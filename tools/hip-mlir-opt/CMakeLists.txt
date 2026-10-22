@@ -9,7 +9,6 @@ add_dependencies(hip-mlir-opt
   HipDialectIncGen
   HipsrDialectIncGen
   OnnxDialectIncGen
-  TorchDialectIncGen
   HipsrConversionPassIncGen
   HipsrTransformsPassIncGen
   HipTypesIncGen
@@ -22,7 +21,6 @@ target_link_libraries(hip-mlir-opt PRIVATE
   HipDialectIR
   HipsrDialectIR
   OnnxDialectIR
-  TorchDialectIR
   HipsrDialectTransforms
   HipsrDialectPipelines
   HipDialectTransforms
