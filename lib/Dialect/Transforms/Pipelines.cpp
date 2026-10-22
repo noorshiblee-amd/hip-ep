@@ -7,6 +7,9 @@
 #include "hip/Compiler/PluginRegistry.h"
 #include "hip/Conversion/OnnxToHip/Passes.h"
 #include "hip/Conversion/OnnxToHipDNN/Passes.h"
+#ifdef HIP_EP_TORCH_FROM_PLUGIN
+#include "hip/Conversion/TorchToHip/Passes.h"
+#endif
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Transforms/Passes.h"
 #include "hip/debug_log.h"
@@ -535,6 +538,18 @@ void mlir::hip::buildRocMlirPipeline(
   pm.addPass(mlir::createCanonicalizerPass());
 }
 
+void mlir::hip::buildTorchToHipPipeline(
+    OpPassManager &pm, const OnnxToHipPipelineOptions &options,
+    morphizen::FileSystem *fs) {
+  pm.addPass(createHipAddContextArgPass());
+  // The lowering pass is defined by the torch_hip plugin. A host built without
+  // that plugin still recognizes a Torch module, but has nothing to lower it.
+#ifdef HIP_EP_TORCH_FROM_PLUGIN
+  pm.addPass(createConvertTorchToHipPass());
+#endif
+  buildOnnxToHipPipelineTail(pm, options, fs);
+}
+
 void mlir::hip::registerHipPipelines() {
   PassPipelineRegistration<OnnxToHipPipelineOptions>(
       "onnx-to-hip-pipeline",
@@ -542,6 +557,13 @@ void mlir::hip::registerHipPipelines() {
       "externalization",
       [](OpPassManager &pm, const OnnxToHipPipelineOptions &opts) {
         buildOnnxToHipPipeline(pm, opts);
+      });
+
+  PassPipelineRegistration<OnnxToHipPipelineOptions>(
+      "torch-to-hip-pipeline",
+      "Lower the accepted Torch subset to bufferized HIP memref IR",
+      [](OpPassManager &pm, const OnnxToHipPipelineOptions &opts) {
+        buildTorchToHipPipeline(pm, opts);
       });
 
   PassPipelineRegistration<HipToLLVMPipelineOptions>(

@@ -109,6 +109,9 @@ registerAllDialects(mlir::DialectRegistry &registry,
   registry.insert<mlir::ub::UBDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
+  // The `torch` dialect is registered by the torch_hip plugin (see
+  // loadAllDialects). A build without that plugin has no Torch parser.
+  // docs/design/torch-to-hip.md.
 
   registerConvertToLLVMInterfaces(registry);
 
@@ -201,8 +204,9 @@ inline void registerAllPasses() {
     mlir::hipsr::registerHipsrPipelines();
 
     // Conversion passes (convert-onnx-to-hip, outline-onnx-to-hipdnn,
-    // convert-hip-to-llvm); onnx-loop-outline and its sibling onnx-if-outline
-    // are hand-written, not in the .td set, so they are registered separately
+    // convert-hip-to-llvm). convert-torch-to-hip is registered by the
+    // torch_hip plugin. onnx-loop-outline and onnx-if-outline are
+    // hand-written, not in the .td set, so they are registered separately
     // below.
     registerConversionPasses();
     mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

@@ -90,6 +90,7 @@ see [below](#passes-that-are-not-individually-nameable)). Prefer, in order:
 | Name | Options | What it builds |
 |---|---|---|
 | `onnx-to-hip-pipeline` | `externalize-output-dir`, `externalize-min-num-elements`, `skip-constant-data` | ONNX dialect → fully bufferized, pooled HIP memref IR with resolved extern constants. |
+| `torch-to-hip-pipeline` | same options as `onnx-to-hip-pipeline` | Accepted Torch subset → the same bufferized HIP memref IR. Inserts `!hip.context`, runs `convert-torch-to-hip`, then the ONNX pipeline tail. `CompilerDriver` selects it in place of the ONNX front end when the parsed module carries Torch IR. |
 | `hip-to-llvm-pipeline` | `constants-file` | HIP memref IR → LLVM dialect + the C-ABI interface (`inference_init/compute/cleanup`, metadata). |
 | `hipdnn-pipeline` | `constants-file`, `constants-dir`, `externalize-min-num-elements` | The full ONNX→HIP→LLVM→interface flow (chains the two above). |
 
@@ -116,6 +117,7 @@ Options use MLIR's pipeline-option syntax:
 | `hip-infer-loop-body-shapes` | module | Rank-establish unranked tensors inside outlined loop bodies. |
 | `outline-onnx-to-hipdnn` | module | Outline subgraphs targeted at hipDNN graph compilation. |
 | `convert-onnx-to-hip` | module | Pattern-match ONNX ops by name → HIP dialect; lower both constant sweeps to policy-neutral `hip.constant`; legalize GatherBlockQuantized (INT4 packing, unsigned, quantize_axis). |
+| `convert-torch-to-hip` | module | Lower the accepted Torch subset to tensor-mode HIP. Requires `!hip.context` as argument 0. Defined by the `torch_hip` plugin. |
 | `hip-externalize-constants` | module | Validate explicit serialization order, append unordered carriers deterministically, plan/serialize, then replace `hip.constant` using the existing inline/full/streaming/hybrid metadata contract. Direct threshold default: 0. |
 | `hip-infer-shapes` | module | Refine `?` dims on HIP DPS result types via `ReifyRankedShapedTypeOpInterface`. |
 | `hip-fusion-transform` | module | HIP-to-HIP rewriting at unrestricted arity (one op → many, many → one, or subgraph → subgraph). The patterns live in `lib/Dialect/Transforms/fusion_pattern/` — PDLL files compiled into the library, plus native C++ for rewrites whose shape depends on the matched op's rank — and share one `RewritePatternSet`. |

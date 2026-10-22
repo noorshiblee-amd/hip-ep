@@ -31,9 +31,23 @@ static int hipdnn_to_hip_dtype(int64_t hipdnn_type) {
     return HIP_DTYPE_INT8;
   case HIPDNN_EP_DATATYPE_INT16:
     return HIP_DTYPE_INT16;
+  case HIPDNN_EP_DATATYPE_BOOL:
+    return HIP_DTYPE_BOOL;
   default:
     return -1;
   }
+}
+
+// A bool buffer holds one byte per element that is already 0 or 1, so widening
+// it to any other type is byte-identical to widening a uint8. Only the
+// narrowing direction needs its own kernels, because converting to bool is
+// `x != 0` rather than a truncation. Collapsing bool to uint8 on the source
+// side keeps the kernel dispatch table from needing a bool row for every
+// destination type.
+static int cast_src_dtype(int64_t hipdnn_type) {
+  if (hipdnn_type == HIPDNN_EP_DATATYPE_BOOL)
+    return HIP_DTYPE_UINT8;
+  return hipdnn_to_hip_dtype(hipdnn_type);
 }
 
 int wrap_cast(RuntimeState *state, void *input, void *output,
@@ -101,7 +115,7 @@ int wrap_cast(RuntimeState *state, void *input, void *output,
     return 0;
   }
 
-  int src_hip_dtype = hipdnn_to_hip_dtype(src_data_type);
+  int src_hip_dtype = cast_src_dtype(src_data_type);
   int dst_hip_dtype = hipdnn_to_hip_dtype(dst_data_type);
 
   if (src_hip_dtype < 0 || dst_hip_dtype < 0) {

@@ -870,7 +870,9 @@ int wrap_range(RuntimeState *state, void *start, void *limit, void *delta,
 int wrap_reduce_max(RuntimeState *state, void *data, void *axes, void *output,
                     int64_t data_num_elements, int64_t output_num_elements,
                     int64_t axes_num_elements, int64_t data_type,
-                    int64_t keepdims, int64_t noop_with_empty_axes) {
+                    int64_t keepdims, int64_t noop_with_empty_axes,
+                    int64_t inner_size) {
+  (void)inner_size;
   if (!state) {
     fprintf(stderr, "Invalid state in wrap_reduce_max\n");
     return -1;
@@ -879,11 +881,11 @@ int wrap_reduce_max(RuntimeState *state, void *data, void *axes, void *output,
   MOCK_PRINT(
       "[MOCK] wrap_reduce_max(data_num_elements=%lld, "
       "output_num_elements=%lld, axes_num_elements=%lld, data_type=%s(%lld), "
-      "keepdims=%lld, noop_with_empty_axes=%lld)\n",
+      "keepdims=%lld, noop_with_empty_axes=%lld, inner_size=%lld)\n",
       (long long)data_num_elements, (long long)output_num_elements,
       (long long)axes_num_elements, hipdnn_ep_datatype_name(data_type),
       (long long)data_type, (long long)keepdims,
-      (long long)noop_with_empty_axes);
+      (long long)noop_with_empty_axes, (long long)inner_size);
 
   return 0;
 }
@@ -891,7 +893,9 @@ int wrap_reduce_max(RuntimeState *state, void *data, void *axes, void *output,
 int wrap_reduce_min(RuntimeState *state, void *data, void *axes, void *output,
                     int64_t data_num_elements, int64_t output_num_elements,
                     int64_t axes_num_elements, int64_t data_type,
-                    int64_t keepdims, int64_t noop_with_empty_axes) {
+                    int64_t keepdims, int64_t noop_with_empty_axes,
+                    int64_t inner_size) {
+  (void)inner_size;
   if (!state) {
     fprintf(stderr, "Invalid state in wrap_reduce_min\n");
     return -1;
@@ -900,11 +904,11 @@ int wrap_reduce_min(RuntimeState *state, void *data, void *axes, void *output,
   MOCK_PRINT(
       "[MOCK] wrap_reduce_min(data_num_elements=%lld, "
       "output_num_elements=%lld, axes_num_elements=%lld, data_type=%s(%lld), "
-      "keepdims=%lld, noop_with_empty_axes=%lld)\n",
+      "keepdims=%lld, noop_with_empty_axes=%lld, inner_size=%lld)\n",
       (long long)data_num_elements, (long long)output_num_elements,
       (long long)axes_num_elements, hipdnn_ep_datatype_name(data_type),
       (long long)data_type, (long long)keepdims,
-      (long long)noop_with_empty_axes);
+      (long long)noop_with_empty_axes, (long long)inner_size);
 
   return 0;
 }
@@ -912,7 +916,9 @@ int wrap_reduce_min(RuntimeState *state, void *data, void *axes, void *output,
 int wrap_reduce_sum(RuntimeState *state, void *data, void *axes, void *output,
                     int64_t data_num_elements, int64_t output_num_elements,
                     int64_t axes_num_elements, int64_t data_type,
-                    int64_t keepdims, int64_t noop_with_empty_axes) {
+                    int64_t keepdims, int64_t noop_with_empty_axes,
+                    int64_t inner_size) {
+  (void)inner_size;
   if (!state) {
     fprintf(stderr, "Invalid state in wrap_reduce_sum\n");
     return -1;
@@ -921,11 +927,11 @@ int wrap_reduce_sum(RuntimeState *state, void *data, void *axes, void *output,
   MOCK_PRINT(
       "[MOCK] wrap_reduce_sum(data_num_elements=%lld, "
       "output_num_elements=%lld, axes_num_elements=%lld, data_type=%s(%lld), "
-      "keepdims=%lld, noop_with_empty_axes=%lld)\n",
+      "keepdims=%lld, noop_with_empty_axes=%lld, inner_size=%lld)\n",
       (long long)data_num_elements, (long long)output_num_elements,
       (long long)axes_num_elements, hipdnn_ep_datatype_name(data_type),
       (long long)data_type, (long long)keepdims,
-      (long long)noop_with_empty_axes);
+      (long long)noop_with_empty_axes, (long long)inner_size);
 
   return 0;
 }
@@ -933,7 +939,9 @@ int wrap_reduce_sum(RuntimeState *state, void *data, void *axes, void *output,
 int wrap_reduce_mean(RuntimeState *state, void *data, void *axes, void *output,
                      int64_t data_num_elements, int64_t output_num_elements,
                      int64_t axes_num_elements, int64_t data_type,
-                     int64_t keepdims, int64_t noop_with_empty_axes) {
+                     int64_t keepdims, int64_t noop_with_empty_axes,
+                     int64_t inner_size) {
+  (void)inner_size;
   if (!state) {
     fprintf(stderr, "Invalid state in wrap_reduce_mean\n");
     return -1;
@@ -942,11 +950,11 @@ int wrap_reduce_mean(RuntimeState *state, void *data, void *axes, void *output,
   MOCK_PRINT(
       "[MOCK] wrap_reduce_mean(data_num_elements=%lld, "
       "output_num_elements=%lld, axes_num_elements=%lld, data_type=%s(%lld), "
-      "keepdims=%lld, noop_with_empty_axes=%lld)\n",
+      "keepdims=%lld, noop_with_empty_axes=%lld, inner_size=%lld)\n",
       (long long)data_num_elements, (long long)output_num_elements,
       (long long)axes_num_elements, hipdnn_ep_datatype_name(data_type),
       (long long)data_type, (long long)keepdims,
-      (long long)noop_with_empty_axes);
+      (long long)noop_with_empty_axes, (long long)inner_size);
 
   return 0;
 }
@@ -989,6 +997,99 @@ int wrap_cast(RuntimeState *state, void *input, void *output,
              (long long)dst_data_type);
 
   return 0;
+}
+
+int wrap_transpose(RuntimeState *state, const void *input, void *output,
+                   int64_t rank, const int64_t *input_shape,
+                   const int64_t *perm, int64_t num_elements,
+                   int64_t element_size_bytes) {
+  (void)input;
+  (void)output;
+  (void)input_shape;
+  (void)perm;
+  if (!state) {
+    fprintf(stderr, "Invalid state in wrap_transpose\n");
+    return -1;
+  }
+
+  MOCK_PRINT("[MOCK] wrap_transpose(rank=%lld, num_elements=%lld, "
+             "element_size_bytes=%lld)\n",
+             (long long)rank, (long long)num_elements,
+             (long long)element_size_bytes);
+
+  return 0;
+}
+
+// MLIR's `memref.copy` lowering calls this ABI-fixed helper; see the real
+// implementation in real/hip.cpp for the descriptor layout. Mock "device"
+// memory is ordinary host memory, so the strided walk is plain memcpy. It is
+// implemented rather than stubbed because memref.copy is a data-movement
+// primitive the bufferizer inserts on its own: a no-op here would silently
+// drop the copies that insert_slice chains depend on.
+struct UnrankedMemRefHeader {
+  int64_t rank;
+  void *descPtr;
+};
+struct StridedMemRefDescriptor {
+  void *allocPtr;
+  void *alignedPtr;
+  int64_t offset;
+  // sizes occupy [0, rank), strides occupy [rank, 2*rank), both in elements.
+  int64_t sizesAndStrides[];
+};
+
+extern "C" void memrefCopy(int64_t elemSize, UnrankedMemRefHeader *src,
+                           UnrankedMemRefHeader *dst) {
+  if (!src || !dst || !src->descPtr || !dst->descPtr)
+    return;
+  auto *sd = static_cast<StridedMemRefDescriptor *>(src->descPtr);
+  auto *dd = static_cast<StridedMemRefDescriptor *>(dst->descPtr);
+  int64_t rank = src->rank;
+
+  const int64_t *srcSizes = sd->sizesAndStrides;
+  const int64_t *srcStrides = sd->sizesAndStrides + rank;
+  const int64_t *dstStrides = dd->sizesAndStrides + rank;
+
+  char *srcBase = static_cast<char *>(sd->alignedPtr) + sd->offset * elemSize;
+  char *dstBase = static_cast<char *>(dd->alignedPtr) + dd->offset * elemSize;
+
+  if (rank == 0) {
+    memcpy(dstBase, srcBase, static_cast<size_t>(elemSize));
+    return;
+  }
+
+  int64_t total = 1;
+  for (int64_t d = 0; d < rank; ++d) {
+    if (srcSizes[d] == 0)
+      return; // empty axis: nothing to copy
+    total *= srcSizes[d];
+  }
+
+  // Walk the index space one element at a time, honouring both sides' strides.
+  // Correct for any rank and layout; the mock is not a performance path.
+  int64_t idx[16];
+  if (rank > 16) {
+    fprintf(stderr, "[MOCK] memrefCopy: rank %lld exceeds 16\n",
+            (long long)rank);
+    return;
+  }
+  for (int64_t d = 0; d < rank; ++d)
+    idx[d] = 0;
+
+  for (int64_t n = 0; n < total; ++n) {
+    int64_t srcOff = 0, dstOff = 0;
+    for (int64_t d = 0; d < rank; ++d) {
+      srcOff += idx[d] * srcStrides[d];
+      dstOff += idx[d] * dstStrides[d];
+    }
+    memcpy(dstBase + dstOff * elemSize, srcBase + srcOff * elemSize,
+           static_cast<size_t>(elemSize));
+    for (int64_t d = rank - 1; d >= 0; --d) {
+      if (++idx[d] < srcSizes[d])
+        break;
+      idx[d] = 0;
+    }
+  }
 }
 
 int wrap_pool(RuntimeState *state, void *input, void *output, void *indices,
@@ -2133,18 +2234,21 @@ int wrap_expand(RuntimeState *state, void *input, void *shape, void *output,
 int wrap_reduce_prod(RuntimeState *state, void *data, void *axes, void *output,
                      int64_t data_num_elements, int64_t output_num_elements,
                      int64_t axes_num_elements, int64_t data_type,
-                     int64_t keepdims, int64_t noop_with_empty_axes) {
+                     int64_t keepdims, int64_t noop_with_empty_axes,
+                     int64_t inner_size) {
+  (void)inner_size;
   if (!state) {
     fprintf(stderr, "Invalid state in wrap_reduce_prod\n");
     return -1;
   }
   MOCK_PRINT("[MOCK] wrap_reduce_prod(data_num_elements=%lld, "
              "output_num_elements=%lld, axes_num_elements=%lld, "
-             "data_type=%s(%lld), keepdims=%lld, noop_with_empty_axes=%lld)\n",
+             "data_type=%s(%lld), keepdims=%lld, noop_with_empty_axes=%lld, "
+             "inner_size=%lld)\n",
              (long long)data_num_elements, (long long)output_num_elements,
              (long long)axes_num_elements, hipdnn_ep_datatype_name(data_type),
              (long long)data_type, (long long)keepdims,
-             (long long)noop_with_empty_axes);
+             (long long)noop_with_empty_axes, (long long)inner_size);
   return 0;
 }
 

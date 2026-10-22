@@ -32,6 +32,11 @@ static int reduce_max_hipdnn_to_hip_dtype(int64_t hipdnn_type) {
     return HIP_DTYPE_FLOAT16;
   case HIPDNN_EP_DATATYPE_INT32:
     return HIP_DTYPE_INT32;
+  // A bool mask reduces as an unsigned byte: max over 0/1 is logical OR,
+  // which is how aten.any reaches ReduceMax.
+  case HIPDNN_EP_DATATYPE_UINT8:
+  case HIPDNN_EP_DATATYPE_BOOL:
+    return HIP_DTYPE_UINT8;
   case HIPDNN_EP_DATATYPE_INT64:
     return HIP_DTYPE_INT64;
   default:

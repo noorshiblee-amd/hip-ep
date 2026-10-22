@@ -6,6 +6,8 @@ Licensed under the MIT License.
 
 This reference summarizes ONNX operations handled by the built-in ONNX-to-HIP pipeline. Support may be provided by a vendor library, a custom HIP kernel, decomposition into other operations, or standard MLIR tensor transformations.
 
+A Torch module lowers onto the same HIP operations through `torch-to-hip-pipeline`. The accepted subset is documented in the `torch_hip` plugin (`torch_hip/docs/torch-to-hip.md`). [design/torch-to-hip.md](design/torch-to-hip.md) records how this tree selects that pipeline.
+
 The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the corresponding LIT/numeric tests are the source of truth. Individual operations may have data-type, rank, attribute, or dynamic-shape restrictions that are documented in their conversion and test files.
 
 ## Runtime-backed operations
@@ -33,7 +35,7 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | Log | Custom HIP kernel |
 | Pow | Decomposed to Mul / Sqrt / Reciprocal for supported constant scalar exponents |
 | Sub | Custom HIP kernel |
-| Cast | Custom HIP kernel |
+| Cast | Custom HIP kernel. A bool operand uses its own runtime data type: narrowing to bool is `x != 0`, not a width truncation. Other operations treat an `i1` buffer as an unsigned byte, since it is one byte per element holding 0 or 1. |
 | CastLike | Simplified to Cast |
 | Ceil | Custom HIP kernel |
 | Round | Custom HIP kernel |

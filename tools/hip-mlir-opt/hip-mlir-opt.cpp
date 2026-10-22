@@ -85,6 +85,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
+  // The torch dialect is inserted below by the torch_hip plugin registration,
+  // the same path CompilerDriver uses. A build without that plugin cannot
+  // parse Torch IR.
   registry.insert<mlir::pdl::PDLDialect>();
   registry.insert<mlir::pdl_interp::PDLInterpDialect>();
   registry.insert<mlir::ub::UBDialect>();
