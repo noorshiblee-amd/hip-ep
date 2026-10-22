@@ -73,7 +73,6 @@ target_link_libraries(HipDialectTransforms PUBLIC
   HipToLLVM
   HipToTosa
   OnnxToHip
-  TorchToHip
   OnnxToHipDNN
   HipSchemasLib
   MLIRPass
@@ -102,3 +101,9 @@ target_link_libraries(HipDialectTransforms PUBLIC
   MLIRParser
   flatbuffers::flatbuffers
 )
+
+# Pipelines.cpp calls createConvertTorchToHipPass. The plugin provides that
+# symbol when selected; otherwise it comes from the in-tree TorchToHip library.
+if(NOT "torch_hip" IN_LIST HIPDNN_EP_COMPILER_PLUGINS)
+  target_link_libraries(HipDialectTransforms PUBLIC TorchToHip)
+endif()

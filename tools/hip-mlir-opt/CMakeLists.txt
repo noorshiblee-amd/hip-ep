@@ -28,7 +28,6 @@ target_link_libraries(hip-mlir-opt PRIVATE
   HipDialectTransforms
   HipToLLVM
   OnnxToHip
-  TorchToHip
   OnnxToHipsr
   MLIROptLib
   MLIRSupport
