@@ -22,14 +22,16 @@ bool isTorchType(Type type);
 bool isAcceptedFloatElementType(Type elementType);
 
 /// Builtin type for a Torch scalar or value tensor. Non-Torch types pass
-/// through. Integer and bool tensors fail.
+/// through. Ranked integer and i1 tensors are accepted for function arguments
+/// (token ids / masks). Float-only helpers still use toBuiltinTensorType.
 FailureOr<Type> toBuiltinType(Type type);
 
 /// Ranked builtin tensor for a Torch value tensor with an accepted element
 /// type. Fails for every other type.
 FailureOr<RankedTensorType> toBuiltinTensorType(Type type);
 
-/// Lowers torch.constant.int, torch.constant.float, and torch.vtensor.literal.
+/// Lowers torch.constant.int, torch.constant.float, torch.constant.bool, and
+/// torch.vtensor.literal. A used torch.constant.none is left for its consumer.
 /// `NotCarrier` leaves the operation alone. `Failed` has already diagnosed.
 enum class CarrierResult { NotCarrier, Lowered, Failed };
 

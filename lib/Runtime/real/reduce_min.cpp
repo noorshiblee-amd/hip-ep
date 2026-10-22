@@ -29,6 +29,11 @@ static int reduce_min_hipdnn_to_hip_dtype(int64_t hipdnn_type) {
     return HIP_DTYPE_INT32;
   case HIPDNN_EP_DATATYPE_INT64:
     return HIP_DTYPE_INT64;
+  // A bool mask reduces as an unsigned byte: min over 0/1 is logical AND,
+  // which is how aten.all reaches ReduceMin.
+  case HIPDNN_EP_DATATYPE_UINT8:
+  case HIPDNN_EP_DATATYPE_BOOL:
+    return HIP_DTYPE_UINT8;
   default:
     return -1;
   }

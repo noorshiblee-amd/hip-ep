@@ -209,6 +209,20 @@ inline int64_t getHipdnnDataType(Type elemType) {
   return HIPDNN_EP_DATATYPE_UNSUPPORTED;
 }
 
+// As getHipdnnDataType, but maps `i1` onto the unsigned-byte slot.
+//
+// An i1 memref is one byte per element holding 0 or 1, so an op that only
+// moves elements around (expand, gather_nd) or compares them (reduce_min as
+// logical AND, reduce_max as logical OR) is byte-identical on a bool and a
+// ui8 buffer. Use this only where that is true: an op whose result depends on
+// interpreting the value, notably hip.cast, must keep bool distinct, because
+// narrowing to bool is `x != 0` rather than a truncation.
+inline int64_t getHipdnnDataTypeBoolAsByte(Type elemType) {
+  if (elemType.isInteger(1))
+    return HIPDNN_EP_DATATYPE_UINT8;
+  return getHipdnnDataType(elemType);
+}
+
 // Tensor operation types (must match runtime enum).
 // HIPDNN_EP_TENSOR_OP_* values.
 enum class TensorOp : int64_t {

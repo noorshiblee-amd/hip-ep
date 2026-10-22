@@ -5,6 +5,7 @@
 
 add_library(TorchToHip STATIC
   ElementwiseConversion.cpp
+  ModelConversion.cpp
   TorchFrontend.cpp
   TorchToHip.cpp
   TorchToHipUtils.cpp

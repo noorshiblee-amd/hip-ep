@@ -40,6 +40,9 @@
 #define HIPDNN_EP_DATATYPE_UINT8 7    // ui8, 1 byte
 #define HIPDNN_EP_DATATYPE_INT16 8    // i16, 2 byte
 #define HIPDNN_EP_DATATYPE_UINT16 9   // ui16, 2 byte
+// i1, 1 byte. Distinct from INT8 because a cast to bool is `x != 0`, not a
+// width truncation: casting 2.5 to INT8 yields 2, but to BOOL yields 1.
+#define HIPDNN_EP_DATATYPE_BOOL 10
 
 // Returned by the compiler-side mappings for an element type with no runtime
 // identifier, so a caller fails conversion explicitly instead of passing a

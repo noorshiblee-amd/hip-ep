@@ -25,10 +25,10 @@ struct PackedBinary {
 };
 
 FailureOr<PackedBinary> packBinaryBroadcast(OpBuilder &builder, Location loc,
-                                             Value lhs, Value rhs,
-                                             RankedTensorType resultType);
+                                            Value lhs, Value rhs,
+                                            RankedTensorType resultType);
 
-enum class ElementwiseKind { Add, Mul };
+enum class ElementwiseKind { Add, Mul, Sub, Div, Max, Min };
 
 FailureOr<Value> emitElementwise(OpBuilder &builder, Location loc,
                                  Value context, Value lhs, Value rhs,
@@ -43,6 +43,11 @@ FailureOr<Value> castToElementType(OpBuilder &builder, Location loc,
 /// converted with sitofp; wider floats are truncated.
 FailureOr<Value> materializeScalarTensor(OpBuilder &builder, Location loc,
                                          Value scalar, Type elementType);
+
+/// Prepends size-1 dimensions to a static, non-scalar tensor until it has
+/// `targetRank` dimensions.
+FailureOr<Value> rightAlignTensor(OpBuilder &builder, Location loc, Value value,
+                                  int64_t targetRank);
 
 /// True when `value` is an arith.constant integer 1 or float 1.0.
 bool isUnitScalar(Value value);

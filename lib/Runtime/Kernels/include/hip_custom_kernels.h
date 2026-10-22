@@ -69,6 +69,10 @@ typedef enum {
     HIP_DTYPE_UINT8    = 7,
     HIP_DTYPE_INT8     = 8,
     HIP_DTYPE_UINT16   = 9,
+    /* One byte per element holding 0 or 1. Only meaningful as a cast
+     * destination, where narrowing is `x != 0` rather than a truncation; as a
+     * source a bool buffer is interchangeable with HIP_DTYPE_UINT8. */
+    HIP_DTYPE_BOOL     = 10,
 } hip_dtype_t;
 
 /* =========================================================================

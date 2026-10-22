@@ -17,6 +17,7 @@
 #include "hip/Dialect/IR/HipBufferize.h"
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Onnx/IR/OnnxDialect.h"
+#include "hip/Dialect/Torch/IR/TorchDialect.h"
 #include "hip/Dialect/Transforms/Passes.h"
 #include "hip/Dialect/Transforms/Pipelines.h"
 
@@ -109,6 +110,10 @@ registerAllDialects(mlir::DialectRegistry &registry,
   registry.insert<mlir::ub::UBDialect>();
   registry.insert<mlir::hip::HipDialect>();
   registry.insert<mlir::hipsr::HipsrDialect>();
+  // Parser for a Torch module produced by an out-of-tree exporter. The
+  // compiler selects `torch-to-hip-pipeline` over the ONNX front end when the
+  // parsed module carries Torch IR; see docs/design/torch-to-hip.md.
+  registry.insert<mlir::torch::TorchDialect>();
 
   registerConvertToLLVMInterfaces(registry);
 

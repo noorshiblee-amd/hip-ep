@@ -29,10 +29,17 @@ struct ReduceOpLowering : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
   const char *funcName;
   const char *opName;
+  // Whether an i1 operand may be reduced as an unsigned byte. True only for
+  // min and max, where the byte-wise result is the logical AND / OR a bool
+  // reduction wants. A summing reduction must not take this path: accumulating
+  // 0/1 bytes into a byte wraps at 256, so those keep rejecting i1 and rely on
+  // the frontend casting to the (wider) result element type first.
+  bool boolReducesAsByte;
 
   ReduceOpLowering(const LLVMTypeConverter &converter, const char *func,
-                   const char *op)
-      : ConvertOpToLLVMPattern<OpTy>(converter), funcName(func), opName(op) {}
+                   const char *op, bool boolAsByte = false)
+      : ConvertOpToLLVMPattern<OpTy>(converter), funcName(func), opName(op),
+        boolReducesAsByte(boolAsByte) {}
 
   LogicalResult
   matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
@@ -60,7 +67,10 @@ struct ReduceOpLowering : public ConvertOpToLLVMPattern<OpTy> {
     auto axesType = cast<MemRefType>(op.getAxes().getType());
     auto outputType = cast<MemRefType>(op.getOutput().getType());
 
-    int64_t dataTypeEnum = getHipdnnDataType(dataType.getElementType());
+    int64_t dataTypeEnum =
+        boolReducesAsByte
+            ? getHipdnnDataTypeBoolAsByte(dataType.getElementType())
+            : getHipdnnDataType(dataType.getElementType());
     if (dataTypeEnum < 0) {
       std::string msg = "unsupported element type for hip.";
       msg += opName;
@@ -170,10 +180,10 @@ void populateReduceLoweringPatterns(const LLVMTypeConverter &converter,
                                                   "reduce_mean");
   patterns.insert<ReduceOpLowering<ReduceL2Op>>(converter, kWrapReduceL2,
                                                 "reduce_l2");
-  patterns.insert<ReduceOpLowering<ReduceMaxOp>>(converter, kWrapReduceMax,
-                                                 "reduce_max");
-  patterns.insert<ReduceOpLowering<ReduceMinOp>>(converter, kWrapReduceMin,
-                                                 "reduce_min");
+  patterns.insert<ReduceOpLowering<ReduceMaxOp>>(
+      converter, kWrapReduceMax, "reduce_max", /*boolAsByte=*/true);
+  patterns.insert<ReduceOpLowering<ReduceMinOp>>(
+      converter, kWrapReduceMin, "reduce_min", /*boolAsByte=*/true);
   patterns.insert<ReduceOpLowering<ReduceProdOp>>(converter, kWrapReduceProd,
                                                   "reduce_prod");
 }

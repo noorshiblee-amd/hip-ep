@@ -13,9 +13,10 @@ def Torch_Dialect : Dialect {
   let summary = "Accepted subset of backend-contract Torch IR";
   let description = [{
     Parses the Torch operations this compiler lowers to tensor-mode HIP IR.
-    The producer is external. This dialect spells only the operations and
-    types the conversion accepts, plus enough structure for an unknown
-    operation to round-trip in generic form.
+    The producer is external. This dialect spells the accepted operations
+    and types, including `torch.operator` for torch-mlir ONNX import and
+    `!torch.none`, plus enough structure for an unknown operation to
+    round-trip in generic form.
 
     `!torch.vtensor` is ranked and value-semantic. Integer and bool tensor
     element types parse so a later pass can reject them; the accepted compute

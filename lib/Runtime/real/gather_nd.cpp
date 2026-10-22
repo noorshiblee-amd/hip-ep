@@ -31,6 +31,12 @@ static int gather_nd_hipdnn_to_hip_dtype(int64_t hipdnn_type) {
     return HIP_DTYPE_INT32;
   case HIPDNN_EP_DATATYPE_INT64:
     return HIP_DTYPE_INT64;
+  // Byte-wide element types, including a bool mask gathered as UINT8.
+  case HIPDNN_EP_DATATYPE_UINT8:
+  case HIPDNN_EP_DATATYPE_BOOL:
+    return HIP_DTYPE_UINT8;
+  case HIPDNN_EP_DATATYPE_INT8:
+    return HIP_DTYPE_INT8;
   default:
     return -1;
   }

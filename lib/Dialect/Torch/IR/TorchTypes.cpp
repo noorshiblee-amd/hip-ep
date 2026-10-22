@@ -42,6 +42,47 @@ Type ValueTensorType::parse(AsmParser &parser) {
   return ValueTensorType::get(parser.getContext(), sizes, dtype);
 }
 
+Type ListType::parse(AsmParser &parser) {
+  if (parser.parseLess())
+    return {};
+  Type element;
+  // The producer prints `int`, `float`, `vtensor`, and `optional<vtensor>`
+  // rather than the fully qualified Torch type inside the angle brackets.
+  MLIRContext *context = parser.getContext();
+  if (succeeded(parser.parseOptionalKeyword("int"))) {
+    element = IntType::get(context);
+  } else if (succeeded(parser.parseOptionalKeyword("float"))) {
+    element = TorchFloatType::get(context);
+  } else if (succeeded(parser.parseOptionalKeyword("vtensor"))) {
+    element = BareTensorType::get(context);
+  } else if (succeeded(parser.parseOptionalKeyword("optional"))) {
+    if (parser.parseLess() || parser.parseKeyword("vtensor") ||
+        parser.parseGreater())
+      return {};
+    element = OptionalTensorType::get(context);
+  } else if (parser.parseType(element)) {
+    return {};
+  }
+  if (parser.parseGreater())
+    return {};
+  return get(context, element);
+}
+
+void ListType::print(AsmPrinter &printer) const {
+  printer << '<';
+  if (isa<IntType>(getElementType()))
+    printer << "int";
+  else if (isa<TorchFloatType>(getElementType()))
+    printer << "float";
+  else if (isa<BareTensorType>(getElementType()))
+    printer << "vtensor";
+  else if (isa<OptionalTensorType>(getElementType()))
+    printer << "optional<vtensor>";
+  else
+    printer.printType(getElementType());
+  printer << '>';
+}
+
 void ValueTensorType::print(AsmPrinter &printer) const {
   printer << '<';
   printer << '[';

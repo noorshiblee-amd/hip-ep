@@ -71,4 +71,41 @@ module {
 
     return
   }
+
+  // Test 4: Narrowing to bool. The destination dtype must be
+  // HIPDNN_EP_DATATYPE_BOOL (10), not the byte slot other ops alias i1 onto:
+  // converting to bool is `x != 0`, so the runtime needs to tell it apart from
+  // a truncation to a byte.
+  func.func @cast_f32_to_bool(
+      %ctx: !hip.context,
+      %input: memref<4x8xf32, 1>,
+      %output: memref<4x8xi1, 1>) {
+    // CHECK-LABEL: llvm.func @cast_f32_to_bool
+
+    hip.cast(%ctx) ins(%input : memref<4x8xf32, 1>)
+                   outs(%output : memref<4x8xi1, 1>) {to = 9 : i64}
+
+    // CHECK-DAG: llvm.mlir.constant(0 : i64) : i64
+    // CHECK-DAG: llvm.mlir.constant(10 : i64) : i64
+    // CHECK: llvm.call @wrap_cast({{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i64) -> i32
+
+    return
+  }
+
+  // Test 5: Widening from bool, the reverse direction of the mask conversion.
+  func.func @cast_bool_to_f32(
+      %ctx: !hip.context,
+      %input: memref<4x8xi1, 1>,
+      %output: memref<4x8xf32, 1>) {
+    // CHECK-LABEL: llvm.func @cast_bool_to_f32
+
+    hip.cast(%ctx) ins(%input : memref<4x8xi1, 1>)
+                   outs(%output : memref<4x8xf32, 1>) {to = 1 : i64}
+
+    // CHECK-DAG: llvm.mlir.constant(10 : i64) : i64
+    // CHECK-DAG: llvm.mlir.constant(0 : i64) : i64
+    // CHECK: llvm.call @wrap_cast({{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i64) -> i32
+
+    return
+  }
 }

@@ -181,6 +181,29 @@ __global__ void cast_f16_to_ui8_kernel(
   }
 }
 
+// Narrowing to bool is `x != 0`, not a width truncation: truncating 2.5 to a
+// byte yields 2, but converting it to bool must yield 1. Every source type
+// shares one kernel because the only operation is a comparison against zero.
+__device__ __forceinline__ bool cast_is_nonzero(float v) { return v != 0.0f; }
+__device__ __forceinline__ bool cast_is_nonzero(__half v) {
+  return __half2float(v) != 0.0f;
+}
+template <typename SrcT>
+__device__ __forceinline__ bool cast_is_nonzero(SrcT v) {
+  return v != static_cast<SrcT>(0);
+}
+
+template <typename SrcT>
+__global__ void cast_to_bool_kernel(
+    const SrcT* __restrict__ input,
+    uint8_t* __restrict__ output,
+    int64_t num_elements) {
+  int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (idx < num_elements) {
+    output[idx] = cast_is_nonzero(input[idx]) ? uint8_t(1) : uint8_t(0);
+  }
+}
+
 extern "C" int hip_cast(
     void* stream,
     const void* input,
@@ -315,6 +338,54 @@ extern "C" int hip_cast(
                        dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
                        static_cast<const int16_t*>(input),
                        static_cast<uint8_t*>(output), num_elements);
+  } else if (output_dtype == HIP_DTYPE_BOOL) {
+    // One branch for every source type: the destination kernel is the same
+    // comparison against zero regardless of what is being narrowed.
+    switch (input_dtype) {
+    case HIP_DTYPE_FLOAT32:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<float>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const float*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    case HIP_DTYPE_FLOAT16:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<__half>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const __half*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    case HIP_DTYPE_INT64:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<int64_t>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const int64_t*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    case HIP_DTYPE_INT32:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<int32_t>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const int32_t*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    case HIP_DTYPE_UINT8:
+    case HIP_DTYPE_BOOL:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<uint8_t>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const uint8_t*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    case HIP_DTYPE_INT8:
+      hipLaunchKernelGGL(HIP_KERNEL_NAME(cast_to_bool_kernel<int8_t>),
+                         dim3(grid_size), dim3(kBlockSize), 0, hip_stream,
+                         static_cast<const int8_t*>(input),
+                         static_cast<uint8_t*>(output), num_elements);
+      break;
+    default:
+      fprintf(stderr,
+              "[custom_kernels] hip_cast: unsupported conversion "
+              "input_dtype=%d -> BOOL\n",
+              input_dtype);
+      return -1;
+    }
   } else {
     fprintf(stderr,
             "[custom_kernels] hip_cast: unsupported conversion "
