@@ -117,7 +117,7 @@ Options use MLIR's pipeline-option syntax:
 | `hip-infer-loop-body-shapes` | module | Rank-establish unranked tensors inside outlined loop bodies. |
 | `outline-onnx-to-hipdnn` | module | Outline subgraphs targeted at hipDNN graph compilation. |
 | `convert-onnx-to-hip` | module | Pattern-match ONNX ops by name → HIP dialect; lower both constant sweeps to policy-neutral `hip.constant`; legalize GatherBlockQuantized (INT4 packing, unsigned, quantize_axis). |
-| `convert-torch-to-hip` | module | Lower the accepted Torch subset to tensor-mode HIP. Requires `!hip.context` as argument 0. |
+| `convert-torch-to-hip` | module | Lower the accepted Torch subset to tensor-mode HIP. Requires `!hip.context` as argument 0. Defined by the `torch_hip` plugin. |
 | `hip-externalize-constants` | module | Validate explicit serialization order, append unordered carriers deterministically, plan/serialize, then replace `hip.constant` using the existing inline/full/streaming/hybrid metadata contract. Direct threshold default: 0. |
 | `hip-infer-shapes` | module | Refine `?` dims on HIP DPS result types via `ReifyRankedShapedTypeOpInterface`. |
 | `hip-fusion-transform` | module | HIP-to-HIP rewriting at unrestricted arity (one op → many, many → one, or subgraph → subgraph). The patterns live in `lib/Dialect/Transforms/fusion_pattern/` — PDLL files compiled into the library, plus native C++ for rewrites whose shape depends on the matched op's rank — and share one `RewritePatternSet`. |

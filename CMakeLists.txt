@@ -182,14 +182,12 @@ include(AddMLIR)
 # add_subdirectory(lib)/(tools)/(test) so plugin packages can register.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/HipEpPlugins.cmake)
 
-# torch-hip-plugin supplies Torch-MLIR's dialect and createConvertTorchToHipPass.
-# This tree also has an in-tree Torch subset under that same symbol and the
-# dialect name "torch". When the plugin is selected, keep the plugin version
-# and do not register or link the in-tree copy.
+# convert-torch-to-hip lives in torch-hip-plugin. This tree keeps the Torch
+# dialect and selects torch-to-hip-pipeline; the plugin supplies the pass.
+# HIP_EP_TORCH_FROM_PLUGIN tells the host not to register that dialect itself.
 if("torch_hip" IN_LIST HIPDNN_EP_COMPILER_PLUGINS)
   add_compile_definitions(HIP_EP_TORCH_FROM_PLUGIN)
-  message(STATUS
-    "Torch frontend: torch-hip-plugin (not the in-tree TorchToHip library)")
+  message(STATUS "Torch frontend: torch_hip plugin")
 endif()
 
 llvm_map_components_to_libnames(llvm_libs Support Core)

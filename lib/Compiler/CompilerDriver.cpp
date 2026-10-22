@@ -369,6 +369,10 @@ bool CompilerDriver::runMLIRPasses(
 
     COMPILER_DEBUG_LOG("[CompilerDriver] HIPDNN_EP_HIPSR set\n");
   } else if (moduleUsesTorch(module)) {
+#ifndef HIP_EP_TORCH_FROM_PLUGIN
+    error_message = "Torch input requires -DHIPDNN_EP_COMPILER_PLUGINS=torch_hip";
+    return false;
+#else
     // A Torch module bypasses the ONNX front end: buildTorchToHipPipeline
     // inserts !hip.context, lowers the accepted Torch subset to tensor-mode
     // HIP, then runs the same tail and the same HIP->LLVM lowering the ONNX
@@ -385,6 +389,7 @@ bool CompilerDriver::runMLIRPasses(
 
     COMPILER_DEBUG_LOG("[CompilerDriver] Torch input: running "
                        "torch-to-hip-pipeline instead of the ONNX front end\n");
+#endif
   } else {
     mlir::hip::OnnxToHipPipelineOptions onnxToHipOpts;
     onnxToHipOpts.externalizeMinNumElements =

@@ -11,7 +11,7 @@ Licensed under the MIT License.
 
 ## Overview
 
-`hip-mlir-opt` accepts a backend-contract Torch module produced outside this repository and lowers the accepted subset to tensor-mode HIP IR. The shared tail then bufferizes that IR, allocates graph outputs, and pools transients.
+`hip-mlir-opt` accepts a backend-contract Torch module produced outside this repository and lowers the accepted subset to tensor-mode HIP IR. The shared tail then bufferizes that IR, allocates graph outputs, and pools transients. `convert-torch-to-hip` is implemented by the `torch_hip` plugin (`torch-hip-plugin`). A hip-ep build that does not select that plugin parses the Torch dialect and reports that a Torch module requires the plugin.
 
 `hip-compiler` accepts the same module. `CompilerDriver` selects `torch-to-hip-pipeline` over the ONNX front end when the parsed module carries Torch IR — a Torch operation, a `!torch.*` result, or a `!torch.*` block argument — matched on the dialect namespace so the accepted subset grows without touching the driver. An ONNX module matches nothing and takes the unchanged ONNX path. A whole Torch model therefore compiles to a `.bc` or `.so` in one command:
 
@@ -94,8 +94,8 @@ After the pass, a live `torch.*` operation or `!torch.*` type is an error. Graph
 An operation whose HIP counterpart already exists needs three additions:
 
 1. A Torch operation declaration, using the default assembly (`operands : operand-types -> result-types`) unless the producer prints a different form.
-2. A rewrite registered with the Torch-to-HIP population hook. The rewrite consumes builtin tensors and scalars. Type and constant conversion stay in the frontend adapter.
-3. A conversion LIT test, plus a `torch-to-hip-pipeline` test when the operation changes bufferization or constants.
+2. A rewrite registered with the Torch-to-HIP population hook in `torch-hip-plugin`. The rewrite consumes builtin tensors and scalars. Type and constant conversion stay in the frontend adapter.
+3. A conversion LIT test in `torch-hip-plugin` (`torch_hip/test/lit/torch-to-hip`), plus a `torch-to-hip-pipeline` test when the operation changes bufferization or constants.
 
 A HIP operation that does not exist yet has to be added before that rewrite. The rocmlir path is only for an operation that must enter `rocmlir-pipeline`. `torch-to-hip-pipeline` does not.
 

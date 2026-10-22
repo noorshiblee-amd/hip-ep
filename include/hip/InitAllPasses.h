@@ -208,10 +208,10 @@ inline void registerAllPasses() {
     mlir::hipsr::registerHipsrPasses();
     mlir::hipsr::registerHipsrPipelines();
 
-    // Conversion passes (convert-onnx-to-hip, convert-torch-to-hip,
-    // outline-onnx-to-hipdnn, convert-hip-to-llvm); onnx-loop-outline and
-    // its sibling onnx-if-outline
-    // are hand-written, not in the .td set, so they are registered separately
+    // Conversion passes (convert-onnx-to-hip, outline-onnx-to-hipdnn,
+    // convert-hip-to-llvm). convert-torch-to-hip is registered by the
+    // torch_hip plugin. onnx-loop-outline and onnx-if-outline are
+    // hand-written, not in the .td set, so they are registered separately
     // below.
     registerConversionPasses();
     mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

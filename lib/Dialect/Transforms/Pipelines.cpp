@@ -7,7 +7,9 @@
 #include "hip/Compiler/PluginRegistry.h"
 #include "hip/Conversion/OnnxToHip/Passes.h"
 #include "hip/Conversion/OnnxToHipDNN/Passes.h"
+#ifdef HIP_EP_TORCH_FROM_PLUGIN
 #include "hip/Conversion/TorchToHip/Passes.h"
+#endif
 #include "hip/Dialect/IR/HipDialect.h"
 #include "hip/Dialect/Transforms/Passes.h"
 #include "hip/debug_log.h"
@@ -540,7 +542,11 @@ void mlir::hip::buildTorchToHipPipeline(
     OpPassManager &pm, const OnnxToHipPipelineOptions &options,
     morphizen::FileSystem *fs) {
   pm.addPass(createHipAddContextArgPass());
+  // The lowering pass is defined by the torch_hip plugin. A host built without
+  // that plugin still recognizes a Torch module, but has nothing to lower it.
+#ifdef HIP_EP_TORCH_FROM_PLUGIN
   pm.addPass(createConvertTorchToHipPass());
+#endif
   buildOnnxToHipPipelineTail(pm, options, fs);
 }
 
