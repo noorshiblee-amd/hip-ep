@@ -88,8 +88,11 @@ int main(int argc, char **argv) {
   registry.insert<mlir::hipsr::HipsrDialect>();
   // Parser for a Torch module produced by an out-of-tree exporter.
   // hip::compiler::registerAllDialects registers it too, so the tool and the
-  // production compiler accept the same input.
+  // production compiler accept the same input. torch_hip registers Torch-MLIR's
+  // dialect under the same name; inserting both fails.
+#ifndef HIP_EP_TORCH_FROM_PLUGIN
   registry.insert<mlir::torch::TorchDialect>();
+#endif
   registry.insert<mlir::pdl::PDLDialect>();
   registry.insert<mlir::pdl_interp::PDLInterpDialect>();
   registry.insert<mlir::ub::UBDialect>();

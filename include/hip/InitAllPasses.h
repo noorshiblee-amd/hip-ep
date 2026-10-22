@@ -113,7 +113,10 @@ registerAllDialects(mlir::DialectRegistry &registry,
   // Parser for a Torch module produced by an out-of-tree exporter. The
   // compiler selects `torch-to-hip-pipeline` over the ONNX front end when the
   // parsed module carries Torch IR; see docs/design/torch-to-hip.md.
+  // torch_hip registers Torch-MLIR's dialect, which uses the same namespace.
+#ifndef HIP_EP_TORCH_FROM_PLUGIN
   registry.insert<mlir::torch::TorchDialect>();
+#endif
 
   registerConvertToLLVMInterfaces(registry);
 
