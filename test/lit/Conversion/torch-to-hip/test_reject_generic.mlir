@@ -6,8 +6,8 @@
 module {
   func.func @generic_unknown(%lhs: !torch.vtensor<[4],f32>, %rhs: !torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32> {
     // CHECK: no Torch-to-HIP lowering
-    // CHECK: torch.aten.silu
-    %output = "torch.aten.silu"(%lhs) : (!torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32>
+    // CHECK: torch.aten.mish
+    %output = "torch.aten.mish"(%lhs) : (!torch.vtensor<[4],f32>) -> !torch.vtensor<[4],f32>
     return %output : !torch.vtensor<[4],f32>
   }
 }
