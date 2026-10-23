@@ -63,11 +63,17 @@ func.func @two_scalars_one_scratch(%ctx: !hip.context, %x: i64, %y: i32) -> (i64
   return %va, %vb : i64, i32
 }
 
-// --- Float element type: NOT a candidate (likely a real GPU buffer). ---
-// CHECK-LABEL: func.func @rank0_f32_left_alone
-// CHECK-NOT:   hip.get_host_scratch
-// CHECK:       memref.alloc() : memref<f32>
-func.func @rank0_f32_left_alone(%ctx: !hip.context, %x: f32) -> f32 {
+// --- Rank-0 f32 host store: a bufferized scalar splat (LayerNorm eps).
+//     The host writes it and a GPU kernel reads it, so it must not land in
+//     the device pool. ---
+// CHECK-LABEL: func.func @rank0_f32_host_scalar
+// CHECK-SAME:    (%[[CTX:.*]]: !hip.context
+// CHECK-NOT:     memref.alloc()
+// CHECK:         %[[SCRATCH:.*]] = hip.get_host_scratch(%[[CTX]],
+// CHECK-SAME:                            : memref<?xi8>
+// CHECK:         %[[V:.*]] = memref.view %[[SCRATCH]]{{.*}} : memref<?xi8> to memref<f32>
+// CHECK:         memref.store {{.*}}, %[[V]][] : memref<f32>
+func.func @rank0_f32_host_scalar(%ctx: !hip.context, %x: f32) -> f32 {
   %a = memref.alloc() : memref<f32>
   memref.store %x, %a[] : memref<f32>
   %v = memref.load %a[] : memref<f32>
@@ -222,4 +228,20 @@ func.func @no_context_arg_left_alone(%x: i64) -> i64 {
   %v = memref.load %a[] : memref<i64>
   memref.dealloc %a : memref<i64>
   return %v : i64
+}
+
+// A tiny in-module memref.global is host memory. Copy it into host-mapped
+// scratch before a GPU kernel reads it. dense<true> left as a global makes
+// an attention mask all-false.
+// CHECK-LABEL: func.func @global_i1_to_scratch
+// CHECK:         %[[SCRATCH:.*]] = hip.get_host_scratch
+// CHECK:         %[[V:.*]] = memref.view %[[SCRATCH]]{{.*}} : memref<?xi8> to memref<i1>
+// CHECK:         memref.copy %{{.*}}, %[[V]]
+// CHECK:         hip.and{{.*}}ins(%[[V]]
+memref.global "private" constant @__constant_xi1_test : memref<i1> = dense<true>
+func.func @global_i1_to_scratch(%ctx: !hip.context, %mask: memref<4xi1>,
+                                %out: memref<4xi1>) {
+  %g = memref.get_global @__constant_xi1_test : memref<i1>
+  hip.and(%ctx) ins(%g, %mask : memref<i1>, memref<4xi1>) outs(%out : memref<4xi1>)
+  return
 }

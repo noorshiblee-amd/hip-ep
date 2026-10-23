@@ -231,6 +231,29 @@ void generateTestData(void *data, size_t sizeBytes, size_t elemSize) {
     size_t count = sizeBytes / 2;
     for (size_t i = 0; i < count; i++)
       hdata[i] = floatToHalf(static_cast<float>(i % 100 + 1) * 0.0001f);
+  } else if (elemSize == 8) {
+    // HIP_TEST_I64=0,1,2,3,4,5,6,7 uses those ids instead of raw bytes.
+    // Raw bytes are out of range for an embedding table.
+    if (const char *spec = std::getenv("HIP_TEST_I64")) {
+      auto *idata = static_cast<int64_t *>(data);
+      size_t count = sizeBytes / 8;
+      size_t n = 0;
+      const char *p = spec;
+      while (*p && n < count) {
+        char *end = nullptr;
+        long long v = std::strtoll(p, &end, 10);
+        if (end == p)
+          break;
+        idata[n++] = static_cast<int64_t>(v);
+        p = (*end == ',') ? end + 1 : end;
+      }
+      while (n < count)
+        idata[n++] = 0;
+      return;
+    }
+    auto *bytes = static_cast<uint8_t *>(data);
+    for (size_t i = 0; i < sizeBytes; i++)
+      bytes[i] = static_cast<uint8_t>(i % 256);
   } else {
     auto *bytes = static_cast<uint8_t *>(data);
     for (size_t i = 0; i < sizeBytes; i++)
@@ -287,6 +310,16 @@ bool validateOutput(const void *data, size_t sizeBytes, size_t elemSize,
       }
     }
     std::cout << "\n";
+    if (elemSize == 4 && elemCount > 0) {
+      const auto *fdata = static_cast<const float *>(data);
+      if (const char *dump = std::getenv("HIP_TEST_DUMP")) {
+        std::ofstream out(dump, std::ios::binary);
+        out.write(reinterpret_cast<const char *>(fdata),
+                  static_cast<std::streamsize>(elemCount * sizeof(float)));
+        std::cout << "  Dumped " << elemCount << " f32 values to " << dump
+                  << "\n";
+      }
+    }
   }
 
   // NaN/Inf validation for floating-point types
