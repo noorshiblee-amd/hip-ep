@@ -185,6 +185,52 @@ parseShapeOverrides(const std::string &arg) {
   return result;
 }
 
+// Parse --inputs arguments: "0=pixels.bin;1=ids.bin". Each file is raw tensor
+// bytes in element order and must match that input's byte size. Paths may
+// contain ':' (Windows drives); ';' separates entries.
+std::map<int, std::string> parseInputFiles(const std::string &arg) {
+  std::map<int, std::string> result;
+  std::istringstream iss(arg);
+  std::string token;
+  while (std::getline(iss, token, ';')) {
+    if (token.empty())
+      continue;
+    size_t eq_pos = token.find('=');
+    if (eq_pos == std::string::npos || eq_pos == 0)
+      continue;
+    int index = std::stoi(token.substr(0, eq_pos));
+    result[index] = token.substr(eq_pos + 1);
+  }
+  return result;
+}
+
+// Replace a generated input buffer with raw bytes from `path`.
+static bool loadRawInput(const std::string &path, std::vector<uint8_t> &buffer,
+                         std::string &error) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    error = "cannot open " + path;
+    return false;
+  }
+  in.seekg(0, std::ios::end);
+  const std::streamoff n = in.tellg();
+  if (n < 0 || static_cast<size_t>(n) != buffer.size()) {
+    error = path + " is " + std::to_string(n < 0 ? 0 : static_cast<long long>(n)) +
+            " bytes, expected " + std::to_string(buffer.size());
+    return false;
+  }
+  in.seekg(0, std::ios::beg);
+  if (buffer.empty())
+    return true;
+  in.read(reinterpret_cast<char *>(buffer.data()),
+          static_cast<std::streamsize>(buffer.size()));
+  if (!in) {
+    error = "short read from " + path;
+    return false;
+  }
+  return true;
+}
+
 // Resolve dynamic dimensions to concrete values. Standard ONNX uses -1 for
 // unknown dims; Range emits INT64_MIN because its output size is computed
 // at runtime from scalar inputs and has no static value in the metadata.
@@ -447,8 +493,8 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <model.{bc,dll,so}> [--input-shape INDEX=DIMS;...] "
-                 "[--iterations N] [--verbose] [--validate] "
-                 "[--token-ids-stdin POSITION|dynamic]\n";
+                 "[--inputs INDEX=FILE;...] [--iterations N] [--verbose] "
+                 "[--validate] [--token-ids-stdin POSITION|dynamic]\n";
     std::cerr << "Example: " << argv[0]
               << " model.bc --input-shape 0=8,3,224,224 --iterations 10 "
                  "--verbose --validate\n";
@@ -459,6 +505,7 @@ int main(int argc, char **argv) {
 
   std::string bc_path = argv[1];
   std::map<int, std::vector<int64_t>> shape_overrides;
+  std::map<int, std::string> input_files;
   int iterations = 1;
   bool verbose = false;
   bool validate = false;
@@ -470,6 +517,8 @@ int main(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--input-shape" && i + 1 < argc) {
       shape_overrides = parseShapeOverrides(argv[++i]);
+    } else if (arg == "--inputs" && i + 1 < argc) {
+      input_files = parseInputFiles(argv[++i]);
     } else if (arg == "--iterations" && i + 1 < argc) {
       iterations = std::stoi(argv[++i]);
     } else if (arg == "--verbose") {
@@ -594,7 +643,19 @@ int main(int argc, char **argv) {
     size_t count = elementCount(input_shapes[i]);
     size_t sizeBytes = count * input_elem_sizes[i];
     std::vector<uint8_t> buffer(sizeBytes);
-    generateTestData(buffer.data(), sizeBytes, input_elem_sizes[i]);
+    auto file = input_files.find(static_cast<int>(i));
+    if (file != input_files.end()) {
+      std::string loadErr;
+      if (!loadRawInput(file->second, buffer, loadErr)) {
+        std::cerr << "ERROR: input " << i << ": " << loadErr << "\n";
+        return 1;
+      }
+      if (verbose)
+        std::cout << "  Loaded input " << i << " from " << file->second << " ("
+                  << sizeBytes << " bytes)\n";
+    } else {
+      generateTestData(buffer.data(), sizeBytes, input_elem_sizes[i]);
+    }
     input_buffers.push_back(std::move(buffer));
     input_shape_storage.push_back(input_shapes[i]);
 
