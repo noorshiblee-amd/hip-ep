@@ -125,14 +125,22 @@ static void *hip_test_allocate(void *self, int64_t out_idx,
   if (static_cast<size_t>(out_idx) >= ctx->outs.size())
     ctx->outs.resize(static_cast<size_t>(out_idx) + 1);
   OutputSlot &slot = ctx->outs[static_cast<size_t>(out_idx)];
-  slot.shape.assign(shape, shape + rank);
-  slot.elem_size = static_cast<size_t>(elem_size);
+  const std::vector<int64_t> newShape(shape, shape + rank);
   size_t nelem = 1;
   for (int64_t i = 0; i < rank; ++i)
     nelem *= static_cast<size_t>(shape[i]);
-  slot.nbytes = nelem * static_cast<size_t>(elem_size);
-  slot.host.assign(slot.nbytes, 0);
+  const size_t newBytes = nelem * static_cast<size_t>(elem_size);
+  const bool reuse = slot.shape == newShape &&
+                     slot.elem_size == static_cast<size_t>(elem_size) &&
+                     slot.nbytes == newBytes;
+  slot.shape = std::move(newShape);
+  slot.elem_size = static_cast<size_t>(elem_size);
+  slot.nbytes = newBytes;
+  if (!reuse)
+    slot.host.assign(slot.nbytes, 0);
 #ifdef HIPDNN_EP_LINK_HIP_HOST
+  if (slot.gpu && reuse)
+    return slot.gpu;
   if (slot.gpu) {
     (void)hipFree(slot.gpu);
     slot.gpu = nullptr;
@@ -407,12 +415,40 @@ static bool parseMetadata(const char *json_str, std::vector<TensorMeta> &inputs,
 
   return parseTensors("inputs", inputs) && parseTensors("outputs", outputs);
 }
+
+/// Parse one stdin record of comma-separated int64 token ids.
+static bool parseTokenIds(const std::string &line, size_t expected,
+                          std::vector<int64_t> &ids, std::string &error) {
+  ids.clear();
+  std::istringstream stream(line);
+  std::string token;
+  while (std::getline(stream, token, ',')) {
+    if (token.empty()) {
+      error = "empty token id";
+      return false;
+    }
+    try {
+      ids.push_back(std::stoll(token));
+    } catch (const std::exception &) {
+      error = "invalid token id '" + token + "'";
+      return false;
+    }
+  }
+  if (ids.size() != expected) {
+    error = "expected " + std::to_string(expected) + " token ids, got " +
+            std::to_string(ids.size());
+    return false;
+  }
+  return true;
+}
+
 int main(int argc, char **argv) {
   hip::install_crash_handlers("hip-test");
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <model.{bc,dll,so}> [--input-shape INDEX=DIMS;...] "
-                 "[--iterations N] [--verbose] [--validate]\n";
+                 "[--iterations N] [--verbose] [--validate] "
+                 "[--token-ids-stdin POSITION|dynamic]\n";
     std::cerr << "Example: " << argv[0]
               << " model.bc --input-shape 0=8,3,224,224 --iterations 10 "
                  "--verbose --validate\n";
@@ -426,6 +462,9 @@ int main(int argc, char **argv) {
   int iterations = 1;
   bool verbose = false;
   bool validate = false;
+  int64_t tokenIdsPosition = -1;
+  bool tokenIdsStdin = false;
+  bool dynamicTokenIdsPosition = false;
 
   for (int i = 2; i < argc; i++) {
     std::string arg = argv[i];
@@ -437,6 +476,13 @@ int main(int argc, char **argv) {
       verbose = true;
     } else if (arg == "--validate") {
       validate = true;
+    } else if (arg == "--token-ids-stdin" && i + 1 < argc) {
+      tokenIdsStdin = true;
+      const std::string positionArg = argv[++i];
+      if (positionArg == "dynamic")
+        dynamicTokenIdsPosition = true;
+      else
+        tokenIdsPosition = std::stoll(positionArg);
     }
   }
 
@@ -591,6 +637,90 @@ int main(int argc, char **argv) {
   // Install the output allocator so the model.dll can request output buffers
   // in-graph. Cleared after the run so a stale `self` can never be used.
   set_alloc_func(state, &alloc);
+
+  // Persistent decode mode used by small autoregressive clients. The model,
+  // constants, HIP state, input allocation, and output allocation stay alive.
+  // Each stdin line updates the one int64 input tensor and prints the argmax
+  // of one output position. This avoids reopening multi-GB constants and
+  // copying an entire logits tensor for every generated token.
+  if (tokenIdsStdin) {
+    if (num_inputs != 1 || input_elem_sizes[0] != sizeof(int64_t) ||
+        input_shapes[0].size() != 2 || input_shapes[0][0] != 1) {
+      std::cerr << "ERROR: --token-ids-stdin requires one [1,N] int64 input\n";
+      set_alloc_func(state, nullptr);
+      cleanup_func(state);
+      return 1;
+    }
+    const size_t tokenCount = elementCount(input_shapes[0]);
+    std::vector<int64_t> tokenIds;
+    std::string line, error;
+    std::cout << "READY\n" << std::flush;
+    while (std::getline(std::cin, line)) {
+      if (line == "QUIT")
+        break;
+      int64_t position = tokenIdsPosition;
+      if (dynamicTokenIdsPosition) {
+        const size_t separator = line.find(';');
+        if (separator == std::string::npos) {
+          std::cerr << "ERROR: expected POSITION;TOKEN_ID,... record\n";
+          continue;
+        }
+        try {
+          position = std::stoll(line.substr(0, separator));
+        } catch (const std::exception &) {
+          std::cerr << "ERROR: invalid logits position\n";
+          continue;
+        }
+        line.erase(0, separator + 1);
+      }
+      if (!parseTokenIds(line, tokenCount, tokenIds, error)) {
+        std::cerr << "ERROR: " << error << "\n";
+        continue;
+      }
+      std::memcpy(input_buffers[0].data(), tokenIds.data(),
+                  tokenCount * sizeof(int64_t));
+      ret = compute_func(state, &inputs_span);
+      if (ret != 0) {
+        std::cerr << "ERROR: inference_compute failed with code " << ret
+                  << "\n";
+        break;
+      }
+      if (octx.outs.empty() || octx.outs[0].elem_size != sizeof(float) ||
+          octx.outs[0].shape.size() != 3 || octx.outs[0].shape[0] != 1 ||
+          position < 0 || position >= octx.outs[0].shape[1]) {
+        std::cerr << "ERROR: expected f32 logits with shape [1,N,V]\n";
+        break;
+      }
+      const OutputSlot &slot = octx.outs[0];
+      const size_t vocab = static_cast<size_t>(slot.shape[2]);
+      const size_t offset = static_cast<size_t>(position) * vocab;
+      std::vector<float> logits(vocab);
+#ifdef HIPDNN_EP_LINK_HIP_HOST
+      hipError_t e = hipMemcpy(logits.data(),
+                               static_cast<const uint8_t *>(slot.gpu) +
+                                   offset * sizeof(float),
+                               vocab * sizeof(float), hipMemcpyDeviceToHost);
+      if (e != hipSuccess) {
+        std::cerr << "ERROR: D2H logits copy failed: " << hipGetErrorString(e)
+                  << "\n";
+        break;
+      }
+#else
+      std::memcpy(logits.data(), slot.host.data() + offset * sizeof(float),
+                  vocab * sizeof(float));
+#endif
+      const auto it = std::max_element(logits.begin(), logits.end());
+      std::cout << std::distance(logits.begin(), it) << "\n" << std::flush;
+    }
+    set_alloc_func(state, nullptr);
+    (void)cleanup_func(state);
+#ifdef HIPDNN_EP_LINK_HIP_HOST
+    for (auto &slot : octx.outs)
+      if (slot.gpu)
+        (void)hipFree(slot.gpu);
+#endif
+    return 0;
+  }
 
   // Run inference
   if (verbose)
