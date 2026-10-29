@@ -12,6 +12,7 @@
 #include "LoadedArtifact.h" // LoadedArtifact, ArtifactKind
 #include "hip/Support/DiskFileSystem.h"
 #include "hip/artifact_abi.h" // hipdnn::abi symbol names
+#include "hip/timing.h"
 #include <memory>
 // On real (GPU) builds we link hip::host so the output-allocator callback can
 // give the model a real device buffer and copy it back to host for validation
@@ -537,6 +538,9 @@ int main(int argc, char **argv) {
 
   if (verbose)
     std::cout << "Loading artifact: " << bc_path << "\n";
+  // Same split as hip-onnx-runner: session is load plus runtime init, and
+  // inference is only the compute call. Input fill sits between the two.
+  const auto sessionStart = std::chrono::steady_clock::now();
   // LoadedArtifact picks the format from the file extension and selects the
   // loader (LlvmIrJit for LLVM IR, morphizen::Plugin for native) -- the same
   // loader the EP uses, so the tool and the library never drift.
@@ -624,6 +628,9 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Load and metadata are part of session setup. Input fill is not.
+  double sessionSeconds = elapsed_since(sessionStart);
+
   // Output shapes are NOT pre-computed here: in output-allocator mode the
   // model.dll sizes each graph output in-graph and requests its buffer via the
   // callback below (hip_test_allocate), passing the concrete shape at that
@@ -689,6 +696,7 @@ int main(int argc, char **argv) {
   // directory, which matches the WORKING_DIRECTORY set in the e2e CMakeLists.
   mlir::hip::DiskFileSystem fs(".");
   void *state = nullptr;
+  const auto initStart = std::chrono::steady_clock::now();
   int ret = init_func(&state, &fs, /*config=*/nullptr);
   if (ret != 0) {
     std::cerr << "ERROR: inference_init failed with code " << ret << "\n";
@@ -698,6 +706,9 @@ int main(int argc, char **argv) {
   // Install the output allocator so the model.dll can request output buffers
   // in-graph. Cleared after the run so a stale `self` can never be used.
   set_alloc_func(state, &alloc);
+  sessionSeconds += elapsed_since(initStart);
+  std::cout << "Session created in "
+            << static_cast<int>(sessionSeconds * 1000) << " ms\n";
 
   // Persistent decode mode used by small autoregressive clients. The model,
   // constants, HIP state, input allocation, and output allocation stay alive.
@@ -783,10 +794,12 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  // Run inference
+  // Run inference. The timer covers inference_compute only, matching
+  // hip-onnx-runner's session->Run() measurement. Validation copies are later.
   if (verbose)
     std::cout << "Running inference (" << iterations << " iteration(s))...\n";
 
+  const auto inferStart = std::chrono::steady_clock::now();
   for (int iter = 0; iter < iterations; iter++) {
     ret = compute_func(state, &inputs_span);
     if (ret != 0) {
@@ -800,6 +813,9 @@ int main(int argc, char **argv) {
     if (verbose && iterations > 1)
       std::cout << "  Iteration " << (iter + 1) << "/" << iterations << "\n";
   }
+  std::cout << "Inference: "
+            << static_cast<int64_t>(elapsed_since(inferStart) * 1e6)
+            << " us\n";
 
   set_alloc_func(state, nullptr);
 
