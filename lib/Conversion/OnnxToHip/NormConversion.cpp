@@ -17,9 +17,14 @@
 //   - onnx.Custom(SkipLayerNormalization)               -> add + layer_norm
 //   - onnx.LayerNormalization (standard, opset 17+)     -> hip.layer_norm
 //   - onnx.InstanceNormalization                        -> hip.instance_norm
+//   - onnx.BatchNormalization (inference)               -> sub/add/sqrt/div/mul
 //===----------------------------------------------------------------------===//
 
 #include "OnnxToHipUtils.h"
+
+#include "mlir/IR/BuiltinAttributes.h"
+
+#include "llvm/ADT/APFloat.h"
 
 namespace mlir {
 namespace hip {
@@ -698,13 +703,143 @@ InstanceNormToHip::matchAndRewrite(mlir::Operation *op,
   return mlir::success();
 }
 
+template <typename OpTy>
+static mlir::Value emitElementwise(mlir::PatternRewriter &rewriter,
+                                   mlir::Location loc, mlir::Value context,
+                                   mlir::RankedTensorType resultType,
+                                   mlir::Value shapeSrc, mlir::Value lhs,
+                                   mlir::Value rhs) {
+  mlir::Value init = createEmptyTensor(rewriter, loc, resultType, shapeSrc);
+  return OpTy::create(rewriter, loc, context, lhs, rhs, init)->getResult(0);
+}
+
+/// Inference BatchNormalization. Channel vectors of shape [C] are expanded to
+/// [1, C, 1, ...] so NumPy broadcast lines the channel up with axis 1 of X.
+/// Training mode is not lowered.
+struct BatchNormToHip : public mlir::RewritePattern {
+  BatchNormToHip(mlir::MLIRContext *ctx)
+      : RewritePattern("onnx.BatchNormalization", /*benefit=*/1, ctx) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override;
+};
+
+static mlir::FailureOr<mlir::Value>
+expandChannelParam(mlir::PatternRewriter &rewriter, mlir::Location loc,
+                   mlir::Value param, mlir::RankedTensorType xType) {
+  auto paramType = mlir::dyn_cast<mlir::RankedTensorType>(param.getType());
+  if (!paramType)
+    return mlir::failure();
+  if (paramType.getRank() == xType.getRank())
+    return param;
+  if (paramType.getRank() != 1 || xType.getRank() < 2)
+    return mlir::failure();
+
+  llvm::SmallVector<int64_t> shape(xType.getRank(), 1);
+  shape[1] = paramType.getDimSize(0);
+  auto outType =
+      mlir::RankedTensorType::get(shape, paramType.getElementType());
+  auto reassoc = mlir::getReassociationIndicesForReshape(paramType, outType);
+  if (!reassoc)
+    return mlir::failure();
+  auto outputShape = mlir::tensor::ExpandShapeOp::inferOutputShape(
+      rewriter, loc, outType, *reassoc,
+      mlir::tensor::getMixedSizes(rewriter, loc, param));
+  if (mlir::failed(outputShape))
+    return mlir::failure();
+  return mlir::tensor::ExpandShapeOp::create(rewriter, loc, outType, param,
+                                             *reassoc, *outputShape)
+      .getResult();
+}
+
+mlir::LogicalResult
+BatchNormToHip::matchAndRewrite(mlir::Operation *op,
+                                mlir::PatternRewriter &rewriter) const {
+  if (op->getNumOperands() != 5 || op->getNumResults() < 1)
+    return rewriter.notifyMatchFailure(
+        op, "onnx.BatchNormalization expects 5 inputs and a Y result");
+  for (unsigned i = 1; i < op->getNumResults(); ++i) {
+    if (!mlir::isa<mlir::NoneType>(op->getResult(i).getType()))
+      return rewriter.notifyMatchFailure(
+          op, "onnx.BatchNormalization training outputs are not lowered");
+  }
+  if (auto training = op->getAttrOfType<mlir::IntegerAttr>("training_mode")) {
+    if (training.getValue().getSExtValue() != 0)
+      return rewriter.notifyMatchFailure(
+          op, "onnx.BatchNormalization training_mode is not lowered");
+  }
+
+  auto xType =
+      mlir::dyn_cast<mlir::RankedTensorType>(op->getOperand(0).getType());
+  auto yType =
+      mlir::dyn_cast<mlir::RankedTensorType>(op->getResult(0).getType());
+  if (!xType || !yType || xType.getRank() < 2 ||
+      !mlir::isa<mlir::FloatType>(xType.getElementType()))
+    return rewriter.notifyMatchFailure(
+        op, "onnx.BatchNormalization expects ranked float NCHW input");
+
+  auto ctxOrFailure = getContextArg(op, rewriter);
+  if (mlir::failed(ctxOrFailure))
+    return mlir::failure();
+  mlir::Value context = *ctxOrFailure;
+  mlir::Location loc = op->getLoc();
+
+  mlir::Value scale, bias, mean, var;
+  for (auto [slot, out] : llvm::zip(llvm::ArrayRef<mlir::Value>{
+                                        op->getOperand(1), op->getOperand(2),
+                                        op->getOperand(3), op->getOperand(4)},
+                                    llvm::SmallVector<mlir::Value *>{
+                                        &scale, &bias, &mean, &var})) {
+    auto expanded = expandChannelParam(rewriter, loc, slot, xType);
+    if (mlir::failed(expanded))
+      return rewriter.notifyMatchFailure(
+          op, "onnx.BatchNormalization channel param is not [C]");
+    *out = *expanded;
+  }
+
+  auto elemType = mlir::cast<mlir::FloatType>(xType.getElementType());
+  double epsilon = 1.0e-5;
+  if (auto attr = op->getAttrOfType<mlir::FloatAttr>("epsilon"))
+    epsilon = attr.getValueAsDouble();
+  auto epsType = mlir::RankedTensorType::get({}, elemType);
+  llvm::APFloat epsLiteral(epsilon);
+  bool losesInfo = false;
+  epsLiteral.convert(elemType.getFloatSemantics(),
+                     llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+  mlir::OperationState epsState(loc, "onnx.Constant");
+  epsState.addTypes(epsType);
+  epsState.addAttribute("value",
+                        mlir::DenseElementsAttr::get(epsType, epsLiteral));
+  mlir::Value eps = rewriter.create(epsState)->getResult(0);
+
+  mlir::Value x = op->getOperand(0);
+  mlir::Value centered =
+      emitElementwise<mlir::hip::SubOp>(rewriter, loc, context, yType, x, x,
+                                       mean);
+  mlir::Value varEps = emitElementwise<mlir::hip::AddOp>(
+      rewriter, loc, context, yType, x, var, eps);
+  mlir::Value stdInit = createEmptyTensor(rewriter, loc, yType, varEps);
+  mlir::Value stddev =
+      mlir::hip::SqrtOp::create(rewriter, loc, context, varEps, stdInit)
+          ->getResult(0);
+  mlir::Value normed = emitElementwise<mlir::hip::DivOp>(
+      rewriter, loc, context, yType, x, centered, stddev);
+  mlir::Value scaled = emitElementwise<mlir::hip::MulOp>(
+      rewriter, loc, context, yType, x, normed, scale);
+  mlir::Value y = emitElementwise<mlir::hip::AddOp>(rewriter, loc, context,
+                                                    yType, x, scaled, bias);
+  rewriter.replaceOp(op, y);
+  return mlir::success();
+}
+
 } // namespace
 
 void populateNormConversionPatterns(RewritePatternSet &patterns,
                                     MLIRContext *ctx) {
   patterns.add<SimplifiedLayerNormToHip, RMSNormalizationToHip,
                SkipSimplifiedLayerNormToHip, SkipLayerNormToHip, LayerNormToHip,
-               InstanceNormToHip>(ctx);
+               InstanceNormToHip, BatchNormToHip>(ctx);
 }
 
 } // namespace hip

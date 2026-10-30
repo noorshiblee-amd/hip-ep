@@ -961,8 +961,33 @@ struct SplitToStdTensor : public mlir::RewritePattern {
     // Generate extract_slice for each output
     llvm::SmallVector<mlir::Value> replacements;
     mlir::OpFoldResult currentOffset = rewriter.getIndexAttr(0);
+    // An unused Split output is imported as `none` (CvT keeps only the class
+    // token and drops the patch tokens). That result is not a tensor, but it
+    // still occupies a split-length slot. Emitting the earlier slices and then
+    // rejecting the `none` result makes the greedy driver abort the pass.
+    mlir::Value droppedResult;
 
     for (unsigned i = 0; i < numOutputs; ++i) {
+      if (mlir::isa<mlir::NoneType>(op->getResult(i).getType())) {
+        if (!droppedResult) {
+          mlir::OperationState state(loc, "onnx.NoValue");
+          state.addTypes(mlir::NoneType::get(rewriter.getContext()));
+          state.addAttribute("value", rewriter.getUnitAttr());
+          droppedResult = rewriter.create(state)->getResult(0);
+        }
+        replacements.push_back(droppedResult);
+        if (i + 1 < numOutputs) {
+          mlir::Value offsetVal = mlir::getValueOrCreateConstantIndexOp(
+              rewriter, loc, currentOffset);
+          mlir::Value lengthVal = mlir::getValueOrCreateConstantIndexOp(
+              rewriter, loc, splitLengths[i]);
+          currentOffset = rewriter.create<mlir::arith::AddIOp>(loc, offsetVal,
+                                                               lengthVal)
+                               .getResult();
+        }
+        continue;
+      }
+
       auto outputType =
           mlir::dyn_cast<mlir::RankedTensorType>(op->getResult(i).getType());
       if (!outputType)

@@ -104,6 +104,20 @@ module {
     return %out0, %out1, %out2 : tensor<2x64xf32>, tensor<5x64xf32>, tensor<3x64xf32>
   }
 
+  // --- Unused tail output imported as none (CvT class-token split) ---
+  func.func @test_split_unused_tail(%data: tensor<1x197x384xf32>) -> tensor<1x1x384xf32> {
+    %split_lengths = "onnx.Constant"() {value = dense<[1, 196]> : tensor<2xi64>} : () -> tensor<2xi64>
+    %out, %unused = "onnx.Split"(%data, %split_lengths) {axis = 1 : si64} : (tensor<1x197x384xf32>, tensor<2xi64>) -> (tensor<1x1x384xf32>, none)
+    return %out : tensor<1x1x384xf32>
+  }
+
+  // --- Unused head output imported as none; the kept slice starts after it ---
+  func.func @test_split_unused_head(%data: tensor<1x197x384xf32>) -> tensor<1x196x384xf32> {
+    %split_lengths = "onnx.Constant"() {value = dense<[1, 196]> : tensor<2xi64>} : () -> tensor<2xi64>
+    %unused, %out = "onnx.Split"(%data, %split_lengths) {axis = 1 : si64} : (tensor<1x197x384xf32>, tensor<2xi64>) -> (none, tensor<1x196x384xf32>)
+    return %out : tensor<1x196x384xf32>
+  }
+
   // --- Invalid: custom split lengths don't sum to axis dimension (pattern should not match) ---
   func.func @test_split_invalid_sum(%data: tensor<10x64xf32>) -> (tensor<3x64xf32>, tensor<3x64xf32>, tensor<3x64xf32>) {
     %split_lengths = "onnx.Constant"() {value = dense<[3, 3, 3]> : tensor<3xi64>} : () -> tensor<3xi64>
@@ -188,6 +202,16 @@ module {
 // CHECK: tensor.extract_slice{{.*}}[0, 0] [2, 64] [1, 1]
 // CHECK: tensor.extract_slice{{.*}}[{{.*}}] [5, 64] [1, 1]
 // CHECK: tensor.extract_slice{{.*}}[{{.*}}] [3, 64] [1, 1]
+
+// CHECK-LABEL: func.func @test_split_unused_tail
+// CHECK-NOT: onnx.Split
+// CHECK-NOT: onnx.NoValue
+// CHECK: tensor.extract_slice{{.*}}[0, 0, 0] [1, 1, 384] [1, 1, 1]
+
+// CHECK-LABEL: func.func @test_split_unused_head
+// CHECK-NOT: onnx.Split
+// CHECK-NOT: onnx.NoValue
+// CHECK: tensor.extract_slice{{.*}}[0, {{.*}}, 0] [1, 196, 384] [1, 1, 1]
 
 // CHECK-LABEL: func.func @test_split_invalid_sum
 // Validation should prevent conversion - onnx.Split should remain
