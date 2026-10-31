@@ -454,6 +454,8 @@ void populateHardActivationConversionPatterns(RewritePatternSet &patterns,
                                               MLIRContext *ctx);
 void populateEinsumConversionPatterns(RewritePatternSet &patterns,
                                       MLIRContext *ctx);
+void populateDepthToSpaceConversionPatterns(RewritePatternSet &patterns,
+                                            MLIRContext *ctx);
 void populateLeakyReluConversionPatterns(RewritePatternSet &patterns,
                                          MLIRContext *ctx);
 void populateSwishConversionPatterns(RewritePatternSet &patterns,

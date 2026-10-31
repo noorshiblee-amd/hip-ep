@@ -84,4 +84,26 @@ module {
   // CHECK: hip.matmul
   // CHECK: hip.transpose
   // CHECK-NOT: onnx.Einsum
+
+  func.func @depth_to_space_crd(%x: tensor<1x12x2x2xf32>) -> tensor<1x3x4x4xf32> {
+    %y = "onnx.DepthToSpace"(%x) {blocksize = 2 : si64, mode = "CRD"} : (tensor<1x12x2x2xf32>) -> tensor<1x3x4x4xf32>
+    return %y : tensor<1x3x4x4xf32>
+  }
+
+  // CHECK-LABEL: func.func @depth_to_space_crd
+  // CHECK: tensor.expand_shape
+  // CHECK: hip.transpose
+  // CHECK-SAME: perm = [0, 1, 4, 2, 5, 3]
+  // CHECK: tensor.collapse_shape
+  // CHECK-NOT: onnx.DepthToSpace
+
+  func.func @depth_to_space_dcr(%x: tensor<1x12x2x2xf32>) -> tensor<1x3x4x4xf32> {
+    %y = "onnx.DepthToSpace"(%x) {blocksize = 2 : si64, mode = "DCR"} : (tensor<1x12x2x2xf32>) -> tensor<1x3x4x4xf32>
+    return %y : tensor<1x3x4x4xf32>
+  }
+
+  // CHECK-LABEL: func.func @depth_to_space_dcr
+  // CHECK: hip.transpose
+  // CHECK-SAME: perm = [0, 3, 4, 1, 5, 2]
+  // CHECK-NOT: onnx.DepthToSpace
 }

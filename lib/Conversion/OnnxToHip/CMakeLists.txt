@@ -108,6 +108,7 @@ add_library(OnnxToHip STATIC
   ReluConversion.cpp
   HardActivationConversion.cpp
   EinsumConversion.cpp
+  DepthToSpaceConversion.cpp
   LeakyReluConversion.cpp
   SwishConversion.cpp
   ClipConversion.cpp
