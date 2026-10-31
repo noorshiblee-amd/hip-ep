@@ -63,4 +63,25 @@ module {
   // CHECK-LABEL: func.func @einsum_av
   // CHECK-NOT: onnx.Einsum
   // CHECK: hip.matmul
+
+  func.func @einsum_bhwc_hkc(%a: tensor<2x3x4x5xf32>, %b: tensor<3x6x5xf32>) -> tensor<2x3x4x6xf32> {
+    %y = "onnx.Einsum"(%a, %b) {equation = "bhwc,hkc->bhwk"} : (tensor<2x3x4x5xf32>, tensor<3x6x5xf32>) -> tensor<2x3x4x6xf32>
+    return %y : tensor<2x3x4x6xf32>
+  }
+
+  // CHECK-LABEL: func.func @einsum_bhwc_hkc
+  // CHECK: hip.transpose
+  // CHECK: tensor.expand_shape
+  // CHECK: hip.matmul
+  // CHECK-NOT: onnx.Einsum
+
+  func.func @einsum_bhwc_wkc(%a: tensor<2x3x4x5xf32>, %b: tensor<4x6x5xf32>) -> tensor<2x3x4x6xf32> {
+    %y = "onnx.Einsum"(%a, %b) {equation = "bhwc,wkc->bhwk"} : (tensor<2x3x4x5xf32>, tensor<4x6x5xf32>) -> tensor<2x3x4x6xf32>
+    return %y : tensor<2x3x4x6xf32>
+  }
+
+  // CHECK-LABEL: func.func @einsum_bhwc_wkc
+  // CHECK: hip.matmul
+  // CHECK: hip.transpose
+  // CHECK-NOT: onnx.Einsum
 }

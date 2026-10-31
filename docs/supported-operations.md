@@ -102,7 +102,7 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | HardSigmoid | Decomposed to Mul / Add / Min / Max |
 | HardSwish | Decomposed to HardSigmoid and Mul |
 | BatchNormalization | Inference form decomposed to channel broadcast, Sub, Add, Sqrt, Div, and Mul |
-| Einsum | `bhlk,bhtk->bhlt` and `bhlt,bhtv->bhlv` lowered to batched MatMul |
+| Einsum | `bhlk,bhtk->bhlt`, `bhlt,bhtv->bhlv`, `bhwc,hkc->bhwk`, and `bhwc,wkc->bhwk` lowered to batched MatMul |
 | LeakyRelu | Custom HIP kernel |
 | Clip | Decomposed to Max + Min |
 | MaxPool | Custom HIP kernel |
