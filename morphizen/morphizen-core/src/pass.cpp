@@ -139,8 +139,8 @@ calculate_return_values(const Graph &graph, const Node &output_node,
   auto args = node_get_output_node_args(output_node);
   auto graph_outputs = morphizen_cxx::GraphConstRef(graph).outputs();
   for (auto arg : args) {
-    if (arg == nullptr) {
-      // for optional outputs
+    if (arg == nullptr || !node_arg_exists(*arg)) {
+      // Optional outputs are nullptr or an empty node arg.
       continue;
     }
     auto &arg_name = node_arg_get_name(*arg);
@@ -552,7 +552,10 @@ IPass_try_fuse(const Graph &graph, const std::string &name,
       body_nodes.push_back(island.ptr());
       // insert island's initalizers input args
       for (auto input : node_inputs_1) {
-        if (input.node == nullptr) {
+        if (input.node == nullptr && input.node_arg != nullptr &&
+            node_arg_exists(*input.node_arg)) {
+          // An empty optional input, such as Resize roi, has no producer and
+          // no node arg. It is not a constant initializer.
           constant_initializers.insert(node_arg_get_name(*input.node_arg));
         }
       }
