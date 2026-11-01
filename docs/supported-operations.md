@@ -76,6 +76,7 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | Gather | Custom HIP kernel |
 | GatherElements | Custom HIP kernel |
 | TopK | Custom HIP kernel |
+| ArgMax | `hip.top_k` with K = 1, then drop the axis when keepdims is 0. Ties keep the first index. Integer data is cast to f32, which is exact up to magnitude 2^24 |
 | Compress | Custom HIP kernel; a dynamic selected extent is scanned and read back before allocation |
 | OneHot | Custom HIP kernel |
 | LayerNormalization | Custom HIP kernel |

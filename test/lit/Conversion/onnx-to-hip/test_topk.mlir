@@ -50,4 +50,16 @@ module {
   // CHECK: tensor.empty({{.*}}, {{.*}}) : tensor<?x?xf32>
   // CHECK: tensor.empty({{.*}}, {{.*}}) : tensor<?x?xi64>
   // CHECK: hip.top_k(%[[CTX3]]) ins(%[[X3]], %[[K3]] : tensor<?x?xf32>, tensor<1xi64>) outs({{.*}}, {{.*}} : tensor<?x?xf32>, tensor<?x?xi64>) {axis = 1 : i64} : tensor<?x?xf32>, tensor<?x?xi64>
+
+  func.func @argmax_keepdims0(%x: tensor<1x77xi32>) -> tensor<1xi64> {
+    %y = "onnx.ArgMax"(%x) {axis = -1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<1x77xi32>) -> tensor<1xi64>
+    return %y : tensor<1xi64>
+  }
+
+  // CHECK-LABEL: func.func @argmax_keepdims0
+  // CHECK: hip.cast
+  // CHECK: hip.top_k
+  // CHECK-SAME: tensor<1x77xf32>
+  // CHECK: tensor.collapse_shape
+  // CHECK-NOT: onnx.ArgMax
 }
