@@ -290,6 +290,9 @@ static mlir::LogicalResult convertComputeOps(mlir::func::FuncOp funcOp,
   populateNonZeroConversionPatterns(patterns, ctx);
   populateConcatConversionPatterns(patterns, ctx);
   populateReluConversionPatterns(patterns, ctx);
+  populateHardActivationConversionPatterns(patterns, ctx);
+  populateEinsumConversionPatterns(patterns, ctx);
+  populateDepthToSpaceConversionPatterns(patterns, ctx);
   populateLeakyReluConversionPatterns(patterns, ctx);
   populateSwishConversionPatterns(patterns, ctx);
   populateClipConversionPatterns(patterns, ctx);

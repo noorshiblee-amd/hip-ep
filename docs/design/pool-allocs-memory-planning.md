@@ -67,7 +67,7 @@ The default domain ID is zero and is omitted from textual IR. Additional domains
 
 `convert-linalg-to-loops` must run before host-scalar materialization: a rank-zero `linalg.fill` must become `memref.store` before the host-I/O candidate scan.
 
-`hip-materialize-host-scalars` redirects small integer/index buffers with host accesses to host-mapped scratch. It runs after allocation-producing rewrites and before PoolAllocs so host-written memory never becomes a view into device-only pool storage.
+`hip-materialize-host-scalars` redirects small integer, index, and floating-point buffers with host accesses to host-mapped scratch. It runs after allocation-producing rewrites and before PoolAllocs so host-written memory never becomes a view into device-only pool storage.
 
 ### Pool-quality preconditions
 
@@ -160,7 +160,7 @@ Each domain is partitioned into:
 
 ### Phase 3: static packing
 
-Static allocations use greedy best-fit gap packing in byte space. Allocations with disjoint lifetimes may reuse the same offset.
+Static allocations use greedy best-fit gap packing in byte space. Allocations with disjoint lifetimes may reuse the same offset. A fully static allocation's byte size is its element count times the element byte width. A sub-byte element such as `i1` occupies one byte, matching the runtime kernels and the dynamic `staticFactor` below.
 
 ### Phase 4: dynamic packing
 
@@ -170,7 +170,7 @@ Dynamic allocation size is:
 staticFactor × product(dynamic dimension SSA values)
 ```
 
-where `staticFactor` is the element byte width multiplied by all static dimensions.
+where `staticFactor` is the element byte width multiplied by all static dimensions. A sub-byte element such as `i1` occupies one byte, because the runtime kernels store one element per byte.
 
 With `lifetime-only=true`, each allocation forms a group. The pass assigns a
 group to the first slab whose existing groups have no overlapping member

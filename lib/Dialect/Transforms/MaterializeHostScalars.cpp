@@ -5,9 +5,10 @@
 //===- MaterializeHostScalars.cpp - host-mapped scratch for tiny scalars --===//
 //
 // Walks `memref.alloc` ops in the function and redirects ones that look like
-// host-fed scalar staging buffers -- small static-shape, integer-or-index
-// memrefs that have at least one host I/O user (memref.store / load) --
-// away from the GPU pool.  Each candidate is replaced by a `memref.view`
+// host-fed scalar staging buffers -- small static-shape integer, index, or
+// floating-point memrefs that have at least one host I/O user (memref.store
+// / load) -- away from the GPU pool.  Each candidate is replaced by a
+// `memref.view`
 // over a single per-function `hip.get_host_scratch(%ctx, %total)` buffer
 // (host-mapped via `hipHostMalloc(hipHostMallocMapped)`, GPU-readable at
 // the same VA on UMA targets, runtime-owned, grow-on-demand).
@@ -92,9 +93,10 @@
 //   - Memrefs larger than 16 elements: the size cap keeps host scratch
 //     bounded and matches the seqlens_k / shape-arith patterns observed
 //     in practice.  Larger buffers stay in the GPU pool where they belong.
-//   - Floating-point element types: rare on the host-fed scalar path,
-//     almost always GPU-consumed in flight, where the GPU pool is the
-//     right home.
+//   - Floating-point buffers with no host load or store. A rank-0 f32
+//     produced by `tensor.splat` of a Torch scalar (LayerNorm eps, an
+//     alpha) bufferizes to a host `memref.store` and is a candidate; a
+//     pure GPU buffer is not.
 //   - Functions whose arg 0 is not `!hip.context`: silently skipped.
 //     Utility functions and pre-context-arg passes don't have access to
 //     the runtime scratch handle; the pass is a best-effort mitigation,
@@ -117,6 +119,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 
 #include "llvm/ADT/Statistic.h"
@@ -193,24 +196,64 @@ static bool classifyHostScalarUsers(Value memrefVal, bool &sawHostIO) {
 }
 
 /// True if \p allocOp is a tiny host-fed scalar staging buffer: a static,
-/// small (<= 16 elements), integer-or-index memref with at least one host-I/O
-/// user (possibly reached through view ops) whose entire transitive user set
-/// is host I/O, metadata, or hip consumers. See classifyHostScalarUsers and
-/// the file header for why each constraint exists.
-static bool isHostScalarCandidate(memref::AllocOp allocOp) {
-  MemRefType type = allocOp.getType();
-  if (!type.hasStaticShape())
-    return false;
-  if (type.getNumElements() > 16)
+/// small (<= 16 elements), integer, index, or floating-point memref with at
+/// least one host-I/O user (possibly reached through view ops) whose entire
+/// transitive user set is host I/O, metadata, or hip consumers. See
+/// classifyHostScalarUsers and the file header for why each constraint exists.
+static bool isSmallHostScalarType(MemRefType type) {
+  if (!type.hasStaticShape() || type.getNumElements() > 16)
     return false;
   Type elem = type.getElementType();
-  if (!elem.isIntOrIndex())
+  // Float scalars are the same host-store pattern as integer ones: a
+  // bufferized rank-0 splat (LayerNorm eps, a scale) is written by the host
+  // and read by a GPU kernel. Leaving it in the device pool drops the store
+  // on device memory the host cannot update, so the kernel reads the pool's
+  // zero fill. 0 + 0 variance then becomes rsqrt(0) and 0 * inf.
+  return elem.isIntOrIndex() || isa<FloatType>(elem);
+}
+
+static int64_t scalarByteSize(MemRefType type) {
+  Type elemTy = type.getElementType();
+  unsigned bits = elemTy.isIndex() ? 64 : elemTy.getIntOrFloatBitWidth();
+  int64_t elemBytes = static_cast<int64_t>((bits + 7) / 8);
+  int64_t bytes = type.getNumElements() * elemBytes;
+  if (bytes == 0)
+    bytes = 1; // rank-0 i1 — never zero-sized
+  return bytes;
+}
+
+static bool isHostScalarCandidate(memref::AllocOp allocOp) {
+  if (!isSmallHostScalarType(allocOp.getType()))
     return false;
 
   bool hasHostIO = false;
   if (!classifyHostScalarUsers(allocOp.getResult(), hasHostIO))
     return false;
   return hasHostIO;
+}
+
+// A bufferized splat that stayed below the constant-externalization threshold
+// is a `memref.global` in host memory. GPU kernels receive that address and
+// read zeros, because it was never registered with the device. A one-element
+// `dense<true>` mask constant is the usual case: every attention position
+// becomes -inf and softmax yields NaN. Copy the bytes into host-mapped
+// scratch, which the device can read.
+static bool isHostGlobalCandidate(memref::GetGlobalOp getGlobal) {
+  auto global = SymbolTable::lookupNearestSymbolFrom<memref::GlobalOp>(
+      getGlobal, getGlobal.getNameAttr());
+  if (!global || !global.getInitialValue() ||
+      global->hasAttr("hip.external_data"))
+    return false;
+  if (!isSmallHostScalarType(getGlobal.getType()))
+    return false;
+  bool hasHostIO = false;
+  if (!classifyHostScalarUsers(getGlobal.getResult(), hasHostIO))
+    return false;
+  // The global itself is the host-side source. A hip consumer is enough;
+  // there is no memref.store on the get_global result.
+  return llvm::any_of(getGlobal.getResult().getUsers(), [](Operation *user) {
+    return user->getDialect() && user->getDialect()->getNamespace() == "hip";
+  });
 }
 
 struct MaterializeHostScalarsPass
@@ -237,9 +280,15 @@ void MaterializeHostScalarsPass::runOnOperation() {
   // (sorting, reverse-walk, parallel collection) changes the scratch layout
   // and therefore the LIT IR snapshots.  Keep `funcOp.walk` (post-order,
   // deterministic).
-  SmallVector<memref::AllocOp> candidates;
+  // Allocs first, then globals. Walk order is the scratch layout, and the
+  // LIT snapshots lock the alloc offsets.
+  SmallVector<Operation *> candidates;
   funcOp.walk([&](memref::AllocOp op) {
     if (isHostScalarCandidate(op))
+      candidates.push_back(op);
+  });
+  funcOp.walk([&](memref::GetGlobalOp op) {
+    if (isHostGlobalCandidate(op))
       candidates.push_back(op);
   });
   if (candidates.empty())
@@ -252,17 +301,11 @@ void MaterializeHostScalarsPass::runOnOperation() {
   SmallVector<int64_t> offsets;
   offsets.reserve(candidates.size());
   int64_t total = 0;
-  for (memref::AllocOp allocOp : candidates) {
-    MemRefType ty = allocOp.getType();
-    Type elemTy = ty.getElementType();
-    unsigned bits = elemTy.isIndex() ? 64 : elemTy.getIntOrFloatBitWidth();
-    int64_t elemBytes = static_cast<int64_t>((bits + 7) / 8);
-    int64_t bytes = ty.getNumElements() * elemBytes;
-    if (bytes == 0)
-      bytes = 1; // rank-0 with i1 etc. — never zero-sized
+  for (Operation *op : candidates) {
+    auto ty = cast<MemRefType>(op->getResult(0).getType());
     int64_t off = roundUp(total, kAlign);
     offsets.push_back(off);
-    total = off + bytes;
+    total = off + scalarByteSize(ty);
   }
   total = roundUp(total, kAlign);
 
@@ -280,24 +323,39 @@ void MaterializeHostScalarsPass::runOnOperation() {
   // Replace each candidate with a memref.view over the scratch buffer.
   // Deallocs of the candidate are erased — the scratch buffer is owned by
   // the runtime (released in hipdnn_ep_state_cleanup), like the pool.
-  for (auto [allocOp, offset] : llvm::zip(candidates, offsets)) {
-    builder.setInsertionPoint(allocOp);
-    Value offsetVal =
-        arith::ConstantIndexOp::create(builder, allocOp.getLoc(), offset);
-    auto view = memref::ViewOp::create(builder, allocOp.getLoc(),
-                                       allocOp.getType(), scratch, offsetVal,
+  for (auto [op, offset] : llvm::zip(candidates, offsets)) {
+    // The global copy must follow the get_global it reads. An alloc is
+    // replaced, so its view goes in front of it.
+    if (isa<memref::GetGlobalOp>(op))
+      builder.setInsertionPointAfter(op);
+    else
+      builder.setInsertionPoint(op);
+    Value offsetVal = arith::ConstantIndexOp::create(builder, op->getLoc(), offset);
+    auto view = memref::ViewOp::create(builder, op->getLoc(),
+                                       cast<MemRefType>(op->getResult(0).getType()),
+                                       scratch, offsetVal,
                                        /*sizes=*/ValueRange{});
 
-    // Erase deallocs first (they reference the alloc's result).
-    SmallVector<memref::DeallocOp> deallocs;
-    for (Operation *user : allocOp->getUsers())
-      if (auto d = dyn_cast<memref::DeallocOp>(user))
-        deallocs.push_back(d);
-    for (auto d : deallocs)
-      d.erase();
+    if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
+      // Erase deallocs first (they reference the alloc's result).
+      SmallVector<memref::DeallocOp> deallocs;
+      for (Operation *user : allocOp->getUsers())
+        if (auto d = dyn_cast<memref::DeallocOp>(user))
+          deallocs.push_back(d);
+      for (auto d : deallocs)
+        d.erase();
 
-    allocOp.replaceAllUsesWith(view.getResult());
-    allocOp.erase();
+      allocOp.replaceAllUsesWith(view.getResult());
+      allocOp.erase();
+    } else {
+      // Keep the global as the copy source. Every other user, including GPU
+      // kernels, reads the host-mapped view.
+      auto copy = memref::CopyOp::create(builder, op->getLoc(),
+                                         op->getResult(0), view.getResult());
+      op->getResult(0).replaceUsesWithIf(view.getResult(), [&](OpOperand &use) {
+        return use.getOwner() != copy;
+      });
+    }
     ++NumAllocsMaterialized;
     LLVM_DEBUG(llvm::dbgs()
                << "  Materialized " << view << " at offset " << offset << "\n");

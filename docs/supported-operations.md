@@ -76,6 +76,7 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | Gather | Custom HIP kernel |
 | GatherElements | Custom HIP kernel |
 | TopK | Custom HIP kernel |
+| ArgMax | `hip.top_k` with K = 1, then drop the axis when keepdims is 0. Ties keep the first index. Integer data is cast to f32, which is exact up to magnitude 2^24 |
 | Compress | Custom HIP kernel; a dynamic selected extent is scanned and read back before allocation |
 | OneHot | Custom HIP kernel |
 | LayerNormalization | Custom HIP kernel |
@@ -99,6 +100,10 @@ The conversion registrations in `lib/Conversion/OnnxToHip/OnnxToHip.cpp` and the
 | LinearAttention (`com.microsoft`) | Custom HIP kernel |
 | CausalConvWithState (`com.microsoft`) | Custom HIP kernel |
 | Relu | Decomposed to Max |
+| HardSigmoid | Decomposed to Mul / Add / Min / Max |
+| HardSwish | Decomposed to HardSigmoid and Mul |
+| BatchNormalization | Inference form decomposed to channel broadcast, Sub, Add, Sqrt, Div, and Mul |
+| Einsum | `bhlk,bhtk->bhlt`, `bhlt,bhtv->bhlv`, `bhwc,hkc->bhwk`, and `bhwc,wkc->bhwk` lowered to batched MatMul |
 | LeakyRelu | Custom HIP kernel |
 | Clip | Decomposed to Max + Min |
 | MaxPool | Custom HIP kernel |
@@ -124,9 +129,10 @@ These operations are handled through standard MLIR transformations and generally
 | Operation | Implementation | Notes |
 |---|---|---|
 | Reshape | `tensor.expand_shape` / `tensor.collapse_shape` | Metadata-only where representable; dynamic dimensions are supported |
+| DepthToSpace | `tensor.expand_shape`, `hip.transpose`, `tensor.collapse_shape` | CRD and DCR, static rank-4 |
 | Unsqueeze | `tensor.expand_shape` | Inserts size-one axes |
 | Squeeze | `tensor.collapse_shape` | Removes size-one axes |
-| Split | `tensor.extract_slice` | Produces tensor slices that bufferize to views |
+| Split | `tensor.extract_slice` | Produces tensor slices that bufferize to views. An unused output imported as `none` is dropped; its split length still advances the next slice |
 | Slice | `tensor.extract_slice` or `hip.slice` | Constant positive-stride forms decompose to tensor slices; runtime indices or negative steps use the runtime path |
 | Concat | `tensor.empty` + `tensor.insert_slice` | Bufferizes to destination subviews and copies |
 | Shape | `tensor.dim` + `tensor.from_elements` | Static shapes fold to constants; dynamic dimensions remain runtime SSA |
