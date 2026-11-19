@@ -349,6 +349,47 @@ def DecomposeConvTransposePass
   ];
 }
 
+def FoldQdqToQuantTypesPass
+    : Pass<"hip-fold-qdq-to-quant-types", "mlir::func::FuncOp"> {
+  let summary = "Fold the Q/DQ around quant-capable ops into quant types";
+  let description = [{
+    For any op implementing HipQuantCapableOpInterface (`hip.add`,
+    `hip.matmul`, `hip.gemm`), turns
+
+      DQ(inputs) -> op -> Q
+
+    into the same op on `!quant.uniform` tensors, with `hip.storage_cast`s at
+    the edges. The op is retyped in place (its init and result included), so
+    attributes and optional operands such as a bias are kept. Every quantized
+    input must be a per-tensor DQ, and the result must have a single Q user
+    of the same shape; otherwise the op is left alone. Per-column and packed
+    4-bit Q/DQ are not per-tensor, so they stay on the Q-specific PDLL
+    fusions of hip-fusion-transform. Kernel availability is not checked here;
+    hip-legalize-quant-types does that.
+  }];
+  let dependentDialects = ["mlir::quant::QuantDialect",
+                           "mlir::tensor::TensorDialect",
+                           "mlir::hip::HipDialect"];
+}
+
+def LegalizeQuantTypesPass
+    : Pass<"hip-legalize-quant-types", "mlir::func::FuncOp"> {
+  let summary = "Move quantized element types into op attributes before "
+                "bufferization";
+  let description = [{
+    Memrefs cannot hold `!quant.uniform` element types. For every quant-capable
+    op (`hip.add`, `hip.matmul`, `hip.gemm`), quantized or not, this pass records
+    the [inputs..., output] element types in the op's `quant_types` attribute,
+    and retypes all quantized tensors to their hip storage integers (`uiN` /
+    signless `iN`). The now-identity `hip.storage_cast`s are removed. Lowering
+    reads `quant_types` to pick the quantized or the float kernel.
+
+    Fails if a quantized op has no kernel for its types (the Q/DQ folds do not
+    check kernels; there is no fallback to DQ -> op -> Q) or if any quantized
+    type remains.
+  }];
+}
+
 def FoldBatchNormPass
     : Pass<"hip-fold-batchnorm", "mlir::func::FuncOp"> {
   let summary = "Fold constant-parameter hip.batch_norm into hip.conv weights";
