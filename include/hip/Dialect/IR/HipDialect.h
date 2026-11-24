@@ -11,6 +11,7 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/TensorEncoding.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Interfaces/DestinationStyleOpInterface.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
@@ -20,6 +21,9 @@
 #include "llvm/ADT/StringRef.h"
 
 #include "hip/Dialect/IR/HipDialect.h.inc"
+
+#define GET_ATTRDEF_CLASSES
+#include "hip/Dialect/IR/HipAttrs.h.inc"
 
 #define GET_TYPEDEF_CLASSES
 #include "hip/Dialect/IR/HipTypes.h.inc"

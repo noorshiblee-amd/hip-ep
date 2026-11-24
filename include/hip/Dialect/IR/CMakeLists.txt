@@ -8,6 +8,11 @@ mlir_tablegen(HipDialect.h.inc -gen-dialect-decls -dialect=hip)
 mlir_tablegen(HipDialect.cpp.inc -gen-dialect-defs -dialect=hip)
 add_public_tablegen_target(HipDialectIncGen)
 
+set(LLVM_TARGET_DEFINITIONS HipAttrs.td)
+mlir_tablegen(HipAttrs.h.inc -gen-attrdef-decls -attrdefs-dialect=hip)
+mlir_tablegen(HipAttrs.cpp.inc -gen-attrdef-defs -attrdefs-dialect=hip)
+add_public_tablegen_target(HipAttrsIncGen)
+
 set(LLVM_TARGET_DEFINITIONS HipTypes.td)
 mlir_tablegen(HipTypes.h.inc -gen-typedef-decls -typedefs-dialect=hip)
 mlir_tablegen(HipTypes.cpp.inc -gen-typedef-defs -typedefs-dialect=hip)

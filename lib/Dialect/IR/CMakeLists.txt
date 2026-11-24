@@ -24,6 +24,7 @@ add_library(HipDialectIR STATIC
 
 add_dependencies(HipDialectIR
   HipDialectIncGen
+  HipAttrsIncGen
   HipTypesIncGen
   HipDpsOpInterfaceIncGen
   HipOpStateInterfaceIncGen
