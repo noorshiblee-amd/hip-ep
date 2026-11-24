@@ -17,6 +17,7 @@ def Hip_Dialect : Dialect {
     Provides operations for memory management and GPU compute dispatch.
   }];
   let cppNamespace = "::mlir::hip";
+  let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
 }
 

@@ -30,7 +30,14 @@ using namespace mlir::hip;
 
 #include "hip/Dialect/IR/HipDialect.cpp.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "hip/Dialect/IR/HipAttrs.cpp.inc"
+
 void HipDialect::initialize() {
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "hip/Dialect/IR/HipAttrs.cpp.inc"
+      >();
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "hip/Dialect/IR/HipTypes.cpp.inc"
@@ -39,6 +46,15 @@ void HipDialect::initialize() {
 #define GET_OP_LIST
 #include "hip/Dialect/IR/HipOps.cpp.inc"
       >();
+}
+
+LogicalResult LayoutAttr::verifyEncoding(
+    ArrayRef<int64_t> shape, Type,
+    llvm::function_ref<InFlightDiagnostic()> emitError) const {
+  if (getValue().getValue().size() != shape.size())
+    return emitError() << "HIP layout length must match tensor rank "
+                       << shape.size();
+  return success();
 }
 
 #define GET_TYPEDEF_CLASSES
